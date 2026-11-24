@@ -1,0 +1,30 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches, local telemetry & parquet datasets
+backend/cache/
+backend/data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Temporary reference clones
+_ref_f1_live_api/
+
+# Environment variables
+.env
+backend/.env
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp

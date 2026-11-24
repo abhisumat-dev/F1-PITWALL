@@ -1,0 +1,634 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://f1-pitwall.local/contract/live_packet.json",
+  "title": "F1 Pit-Wall WebSocket Contract",
+  "description": "Single source of truth for every message sent over ws://localhost:8000/ws/live. Exactly three message types, discriminated by the top-level `type` field: `post_quali_prediction` (Saturday, after qualifying), `live_race_update` (Sunday, free SignalR live feed) and `replay_frame` (full post-race OpenF1 replay). Every win-probability block is normalised so its items sum to 100 percent. `car_data.drs` style fields are nullable because OpenF1 returns null DRS in 2026 sessions.",
+  "oneOf": [
+    { "$ref": "#/$defs/PostQualiPrediction" },
+    { "$ref": "#/$defs/LiveRaceUpdate" },
+    { "$ref": "#/$defs/ReplayFrame" }
+  ],
+  "$defs": {
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "description": "ISO-8601 UTC timestamp with explicit offset."
+    },
+    "NullableTimestamp": {
+      "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }]
+    },
+    "Percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "Compound": {
+      "type": "string",
+      "enum": ["SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET", "UNKNOWN"]
+    },
+    "TrackStatus": {
+      "type": "string",
+      "enum": ["GREEN", "VSC", "SC", "RED", "CHEQUERED", "UNKNOWN"]
+    },
+    "Circuit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "rotation_deg"],
+      "properties": {
+        "circuit_id": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "rotation_deg": {
+          "type": ["number", "null"],
+          "description": "Track-map rotation in degrees taken from OpenF1 meetings[0].circuit_info_url; null when unavailable."
+        }
+      }
+    },
+    "Weather": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "air_temperature_c": { "type": ["number", "null"] },
+        "track_temperature_c": { "type": ["number", "null"] },
+        "humidity_pct": { "type": ["number", "null"] },
+        "pressure_mbar": { "type": ["number", "null"] },
+        "wind_speed_ms": { "type": ["number", "null"] },
+        "wind_direction_deg": { "type": ["number", "null"] },
+        "rainfall": { "type": ["boolean", "null"] }
+      }
+    },
+    "RaceControlMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "message"],
+      "properties": {
+        "date": { "$ref": "#/$defs/Timestamp" },
+        "lap_number": { "type": ["integer", "null"], "minimum": 0 },
+        "category": { "type": ["string", "null"] },
+        "flag": { "type": ["string", "null"] },
+        "scope": { "type": ["string", "null"] },
+        "driver_number": { "type": ["integer", "null"] },
+        "message": { "type": "string" }
+      }
+    },
+    "Tyre": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compound"],
+      "properties": {
+        "compound": { "$ref": "#/$defs/Compound" },
+        "age_laps": { "type": ["integer", "null"], "minimum": 0 },
+        "stint_number": { "type": ["integer", "null"], "minimum": 1 },
+        "is_new": { "type": ["boolean", "null"] }
+      }
+    },
+    "Stint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stint_number", "compound"],
+      "properties": {
+        "stint_number": { "type": "integer", "minimum": 1 },
+        "compound": { "$ref": "#/$defs/Compound" },
+        "lap_start": { "type": ["integer", "null"], "minimum": 1 },
+        "lap_end": { "type": ["integer", "null"], "minimum": 1 },
+        "tyre_age_at_start": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "PitStop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lap_number"],
+      "properties": {
+        "lap_number": { "type": ["integer", "null"], "minimum": 0 },
+        "pit_duration_s": { "type": ["number", "null"], "minimum": 0 },
+        "date": { "$ref": "#/$defs/NullableTimestamp" }
+      }
+    },
+    "TyreDegradation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slope_s_per_lap", "fuel_corrected", "window_laps"],
+      "properties": {
+        "slope_s_per_lap": {
+          "type": ["number", "null"],
+          "description": "Fuel-corrected rolling lap-time slope in seconds per lap; positive means the tyre is degrading."
+        },
+        "fuel_corrected": { "type": "boolean" },
+        "window_laps": { "type": "integer", "minimum": 1 },
+        "sample_laps": { "type": "integer", "minimum": 0 },
+        "stint_number": { "type": ["integer", "null"], "minimum": 1 },
+        "r_squared": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "CarTelemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "date": { "$ref": "#/$defs/NullableTimestamp" },
+        "speed_kph": { "type": ["number", "null"] },
+        "throttle_pct": { "type": ["number", "null"] },
+        "brake_pct": { "type": ["number", "null"] },
+        "gear": { "type": ["integer", "null"] },
+        "rpm": { "type": ["integer", "null"] },
+        "drs": {
+          "type": ["integer", "null"],
+          "description": "Nullable: OpenF1 returns null DRS values in 2026 sessions."
+        },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "z": { "type": ["number", "null"] }
+      }
+    },
+    "DriverState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "driver_number",
+        "code",
+        "full_name",
+        "team_name",
+        "position",
+        "gap_to_leader_s",
+        "interval_s",
+        "tyre",
+        "in_pit",
+        "retired",
+        "win_probability_pct"
+      ],
+      "properties": {
+        "driver_number": { "type": "integer", "minimum": 0 },
+        "code": { "type": "string" },
+        "full_name": { "type": "string" },
+        "team_name": { "type": "string" },
+        "team_colour": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9A-Fa-f]{6}$"
+        },
+        "position": { "type": ["integer", "null"], "minimum": 1 },
+        "grid_position": { "type": ["integer", "null"], "minimum": 0 },
+        "gap_to_leader_s": { "type": ["number", "null"] },
+        "interval_s": { "type": ["number", "null"] },
+        "laps_down": { "type": "integer", "minimum": 0 },
+        "last_lap_time_s": { "type": ["number", "null"], "minimum": 0 },
+        "best_lap_time_s": { "type": ["number", "null"], "minimum": 0 },
+        "tyre": { "$ref": "#/$defs/Tyre" },
+        "stints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Stint" }
+        },
+        "pit_stops": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PitStop" }
+        },
+        "in_pit": { "type": "boolean" },
+        "retired": { "type": "boolean" },
+        "tyre_deg": {
+          "anyOf": [{ "$ref": "#/$defs/TyreDegradation" }, { "type": "null" }]
+        },
+        "win_probability_pct": {
+          "anyOf": [{ "$ref": "#/$defs/Percent" }, { "type": "null" }]
+        },
+        "telemetry": {
+          "anyOf": [{ "$ref": "#/$defs/CarTelemetry" }, { "type": "null" }]
+        }
+      }
+    },
+    "WinProbability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driver_number", "driver_code", "win_probability_pct"],
+      "properties": {
+        "driver_number": { "type": "integer", "minimum": 0 },
+        "driver_code": { "type": "string" },
+        "win_probability_pct": { "$ref": "#/$defs/Percent" }
+      }
+    },
+    "LivePredictionBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "model_version", "generated_at", "items", "sum_pct"],
+      "properties": {
+        "stage": { "const": "in_race" },
+        "model_version": { "type": "string" },
+        "generated_at": { "$ref": "#/$defs/Timestamp" },
+        "lap": { "type": ["integer", "null"], "minimum": 0 },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/WinProbability" }
+        },
+        "sum_pct": {
+          "type": "number",
+          "minimum": 99.99,
+          "maximum": 100.01,
+          "description": "Always 100: win probabilities are normalised across the field."
+        }
+      }
+    },
+    "RaceState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lap_current",
+        "lap_total",
+        "track_status",
+        "drivers",
+        "race_control",
+        "predictions"
+      ],
+      "properties": {
+        "lap_current": { "type": ["integer", "null"], "minimum": 0 },
+        "lap_total": { "type": ["integer", "null"], "minimum": 1 },
+        "track_status": { "$ref": "#/$defs/TrackStatus" },
+        "weather": {
+          "anyOf": [{ "$ref": "#/$defs/Weather" }, { "type": "null" }]
+        },
+        "drivers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DriverState" }
+        },
+        "race_control": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RaceControlMessage" }
+        },
+        "predictions": {
+          "anyOf": [{ "$ref": "#/$defs/LivePredictionBlock" }, { "type": "null" }]
+        }
+      }
+    },
+    "PostQualiEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "driver_number",
+        "driver_code",
+        "full_name",
+        "team_name",
+        "grid_position",
+        "win_probability_pct"
+      ],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1 },
+        "driver_number": { "type": "integer", "minimum": 0 },
+        "driver_code": { "type": "string" },
+        "full_name": { "type": "string" },
+        "team_name": { "type": "string" },
+        "grid_position": { "type": "integer", "minimum": 1 },
+        "win_probability_pct": { "$ref": "#/$defs/Percent" }
+      }
+    },
+    "PostQualiPredictionBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "model_version", "generated_at", "items", "sum_pct"],
+      "properties": {
+        "stage": { "const": "pre_race" },
+        "model_name": { "type": "string" },
+        "model_version": { "type": "string" },
+        "trained_at": { "$ref": "#/$defs/NullableTimestamp" },
+        "generated_at": { "$ref": "#/$defs/Timestamp" },
+        "validation": {
+          "type": "object",
+          "additionalProperties": { "type": ["number", "null"] }
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/PostQualiEntry" }
+        },
+        "sum_pct": {
+          "type": "number",
+          "minimum": 99.99,
+          "maximum": 100.01
+        }
+      }
+    },
+    "ReplayInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_time", "elapsed_s", "duration_s", "speed", "paused", "finished"],
+      "properties": {
+        "session_start": { "$ref": "#/$defs/NullableTimestamp" },
+        "session_time": { "$ref": "#/$defs/Timestamp" },
+        "elapsed_s": { "type": "number", "minimum": 0 },
+        "duration_s": { "type": "number", "minimum": 0 },
+        "speed": { "type": "number", "exclusiveMinimum": 0 },
+        "paused": { "type": "boolean" },
+        "finished": { "type": "boolean" }
+      }
+    },
+    "PostQualiPrediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "type",
+        "timestamp",
+        "season",
+        "round",
+        "grand_prix",
+        "circuit",
+        "grid_source",
+        "predictions"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "type": { "const": "post_quali_prediction" },
+        "timestamp": { "$ref": "#/$defs/Timestamp" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "meeting_key": { "type": ["integer", "null"] },
+        "session_key": { "type": ["integer", "null"] },
+        "season": { "type": "integer", "minimum": 1950 },
+        "round": { "type": "integer", "minimum": 1 },
+        "grand_prix": { "type": "string" },
+        "circuit": { "$ref": "#/$defs/Circuit" },
+        "grid_source": {
+          "type": "string",
+          "enum": ["jolpica_qualifying", "openf1_starting_grid", "jolpica_results"]
+        },
+        "predictions": { "$ref": "#/$defs/PostQualiPredictionBlock" }
+      }
+    },
+    "LiveRaceUpdate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "type",
+        "timestamp",
+        "sequence",
+        "source",
+        "telemetry_unlocked",
+        "circuit",
+        "race"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "type": { "const": "live_race_update" },
+        "timestamp": { "$ref": "#/$defs/Timestamp" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "source": { "const": "signalr_live" },
+        "telemetry_unlocked": {
+          "type": "boolean",
+          "description": "True when F1_LIVE_TOKEN is set and Position.z / CarData.z were decoded."
+        },
+        "meeting_key": { "type": ["integer", "null"] },
+        "session_key": { "type": ["integer", "null"] },
+        "season": { "type": ["integer", "null"] },
+        "round": { "type": ["integer", "null"] },
+        "grand_prix": { "type": ["string", "null"] },
+        "circuit": { "$ref": "#/$defs/Circuit" },
+        "race": { "$ref": "#/$defs/RaceState" }
+      }
+    },
+    "ReplayFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "type",
+        "timestamp",
+        "sequence",
+        "source",
+        "meeting_key",
+        "session_key",
+        "season",
+        "grand_prix",
+        "circuit",
+        "replay",
+        "race"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "type": { "const": "replay_frame" },
+        "timestamp": { "$ref": "#/$defs/Timestamp" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "source": { "const": "openf1_replay" },
+        "meeting_key": { "type": "integer" },
+        "session_key": { "type": "integer" },
+        "season": { "type": "integer", "minimum": 2023 },
+        "round": { "type": ["integer", "null"] },
+        "grand_prix": { "type": "string" },
+        "circuit": { "$ref": "#/$defs/Circuit" },
+        "replay": { "$ref": "#/$defs/ReplayInfo" },
+        "race": { "$ref": "#/$defs/RaceState" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "1.0",
+      "type": "post_quali_prediction",
+      "timestamp": "2026-03-14T18:30:00.000+00:00",
+      "sequence": 0,
+      "meeting_key": 1000,
+      "session_key": 9000,
+      "season": 2026,
+      "round": 1,
+      "grand_prix": "Example Grand Prix",
+      "circuit": { "circuit_id": "example", "name": "Example Circuit", "rotation_deg": 92.0 },
+      "grid_source": "jolpica_qualifying",
+      "predictions": {
+        "stage": "pre_race",
+        "model_name": "logreg",
+        "model_version": "pre_race-logreg-20260101000000",
+        "trained_at": "2026-01-01T00:00:00.000+00:00",
+        "generated_at": "2026-03-14T18:30:00.000+00:00",
+        "validation": { "logloss": 1.9, "top1_accuracy": 0.45 },
+        "items": [
+          {
+            "rank": 1,
+            "driver_number": 1,
+            "driver_code": "EXA",
+            "full_name": "Example Driver A",
+            "team_name": "Example Racing",
+            "grid_position": 1,
+            "win_probability_pct": 55.0
+          },
+          {
+            "rank": 2,
+            "driver_number": 2,
+            "driver_code": "EXB",
+            "full_name": "Example Driver B",
+            "team_name": "Sample Motorsport",
+            "grid_position": 2,
+            "win_probability_pct": 30.0
+          },
+          {
+            "rank": 3,
+            "driver_number": 3,
+            "driver_code": "EXC",
+            "full_name": "Example Driver C",
+            "team_name": "Sample Motorsport",
+            "grid_position": 3,
+            "win_probability_pct": 15.0
+          }
+        ],
+        "sum_pct": 100.0
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "type": "live_race_update",
+      "timestamp": "2026-03-15T14:20:00.000+00:00",
+      "sequence": 42,
+      "source": "signalr_live",
+      "telemetry_unlocked": false,
+      "meeting_key": 1000,
+      "session_key": 9001,
+      "season": 2026,
+      "round": 1,
+      "grand_prix": "Example Grand Prix",
+      "circuit": { "circuit_id": "example", "name": "Example Circuit", "rotation_deg": 92.0 },
+      "race": {
+        "lap_current": 20,
+        "lap_total": 57,
+        "track_status": "GREEN",
+        "weather": {
+          "air_temperature_c": 24.1,
+          "track_temperature_c": 37.5,
+          "humidity_pct": 48.0,
+          "pressure_mbar": 1012.0,
+          "wind_speed_ms": 2.1,
+          "wind_direction_deg": 210.0,
+          "rainfall": false
+        },
+        "drivers": [
+          {
+            "driver_number": 1,
+            "code": "EXA",
+            "full_name": "Example Driver A",
+            "team_name": "Example Racing",
+            "team_colour": "3671C6",
+            "position": 1,
+            "grid_position": 1,
+            "gap_to_leader_s": 0.0,
+            "interval_s": 0.0,
+            "laps_down": 0,
+            "last_lap_time_s": 91.532,
+            "best_lap_time_s": 90.998,
+            "tyre": { "compound": "MEDIUM", "age_laps": 20, "stint_number": 1, "is_new": true },
+            "stints": [
+              { "stint_number": 1, "compound": "MEDIUM", "lap_start": 1, "lap_end": null, "tyre_age_at_start": 0 }
+            ],
+            "pit_stops": [],
+            "in_pit": false,
+            "retired": false,
+            "tyre_deg": {
+              "slope_s_per_lap": 0.041,
+              "fuel_corrected": true,
+              "window_laps": 8,
+              "sample_laps": 8,
+              "stint_number": 1,
+              "r_squared": 0.74
+            },
+            "win_probability_pct": 62.5,
+            "telemetry": null
+          },
+          {
+            "driver_number": 2,
+            "code": "EXB",
+            "full_name": "Example Driver B",
+            "team_name": "Sample Motorsport",
+            "team_colour": null,
+            "position": 2,
+            "grid_position": 2,
+            "gap_to_leader_s": 3.412,
+            "interval_s": 3.412,
+            "laps_down": 0,
+            "last_lap_time_s": null,
+            "best_lap_time_s": null,
+            "tyre": { "compound": "HARD", "age_laps": 20, "stint_number": 1, "is_new": null },
+            "stints": [],
+            "pit_stops": [],
+            "in_pit": false,
+            "retired": false,
+            "tyre_deg": null,
+            "win_probability_pct": 37.5,
+            "telemetry": null
+          }
+        ],
+        "race_control": [
+          {
+            "date": "2026-03-15T14:05:00.000+00:00",
+            "lap_number": 1,
+            "category": "Flag",
+            "flag": "GREEN",
+            "scope": "Track",
+            "driver_number": null,
+            "message": "GREEN LIGHT - PIT EXIT OPEN"
+          }
+        ],
+        "predictions": {
+          "stage": "in_race",
+          "model_version": "in_race-hgb-20260101000000",
+          "generated_at": "2026-03-15T14:20:00.000+00:00",
+          "lap": 20,
+          "items": [
+            { "driver_number": 1, "driver_code": "EXA", "win_probability_pct": 62.5 },
+            { "driver_number": 2, "driver_code": "EXB", "win_probability_pct": 37.5 }
+          ],
+          "sum_pct": 100.0
+        }
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "type": "replay_frame",
+      "timestamp": "2026-11-24T10:00:00.000+00:00",
+      "sequence": 7,
+      "source": "openf1_replay",
+      "meeting_key": 1000,
+      "session_key": 9001,
+      "season": 2026,
+      "round": 1,
+      "grand_prix": "Example Grand Prix",
+      "circuit": { "circuit_id": null, "name": "Example Circuit", "rotation_deg": null },
+      "replay": {
+        "session_start": "2026-03-15T14:00:00.000+00:00",
+        "session_time": "2026-03-15T14:10:00.000+00:00",
+        "elapsed_s": 600.0,
+        "duration_s": 6300.0,
+        "speed": 4.0,
+        "paused": false,
+        "finished": false
+      },
+      "race": {
+        "lap_current": 7,
+        "lap_total": 57,
+        "track_status": "SC",
+        "weather": null,
+        "drivers": [
+          {
+            "driver_number": 1,
+            "code": "EXA",
+            "full_name": "Example Driver A",
+            "team_name": "Example Racing",
+            "position": 1,
+            "gap_to_leader_s": 0.0,
+            "interval_s": 0.0,
+            "tyre": { "compound": "SOFT" },
+            "in_pit": false,
+            "retired": false,
+            "win_probability_pct": null,
+            "telemetry": {
+              "date": "2026-03-15T14:10:00.000+00:00",
+              "speed_kph": 212.0,
+              "throttle_pct": 100.0,
+              "brake_pct": 0.0,
+              "gear": 6,
+              "rpm": 11200,
+              "drs": null,
+              "x": 1204.0,
+              "y": -873.0,
+              "z": 12.0
+            }
+          }
+        ],
+        "race_control": [],
+        "predictions": null
+      }
+    }
+  ]
+}
