@@ -52,6 +52,7 @@ RAW_PRE_RACE_COLUMNS: List[str] = [
     "laps_completed",
     "won",
     "podium",
+    "is_podium",
     "dnf",
     "completed",
 ]
@@ -79,6 +80,8 @@ IN_RACE_RAW_COLUMNS: List[str] = [
     "track_state",
     "final_position",
     "won",
+    "podium",
+    "is_podium",
 ]
 
 PRE_RACE_FEATURES: List[str] = [
@@ -118,6 +121,7 @@ PRE_RACE_FEATURES: List[str] = [
 PRIOR_FEATURES: List[str] = [
     "grid_position",
     "driver_win_rate_10",
+    "driver_podium_rate_10",
     "driver_avg_finish_5",
     "team_points_avg_5",
     "team_win_rate_10",
@@ -152,6 +156,7 @@ IN_RACE_FEATURES: List[str] = [
     "grid_position",
     "positions_gained",
     "driver_win_rate_10",
+    "driver_podium_rate_10",
     "driver_avg_finish_5",
     "team_points_avg_5",
     "team_win_rate_10",
@@ -216,14 +221,151 @@ def normalize_to_percent(values: Iterable[float], decimals: int = 2) -> List[flo
     return [round(float(units) / scale, decimals) for units in floors]
 
 
+def normalize_podium_to_percent(
+    values: Iterable[float],
+    active_mask: Optional[Iterable[bool]] = None,
+    decimals: int = 2,
+    target_sum: float = 300.0,
+    max_per_driver: float = 100.0,
+) -> List[float]:
+    """Iterative clipping-and-normalization for Top 3 (Podium) probabilities.
+
+    * Inactive / DNF / OUT drivers (``active_mask == False``) receive ``0.0``.
+    * Active drivers are scaled and clipped iteratively so each stays within
+      ``[0.0, 100.0]`` and the sum across active drivers equals ``300.0%``
+      (or ``100.0 * n_active`` when fewer than 3 active drivers exist).
+    """
+    raw = np.asarray(list(values), dtype=float)
+    n = raw.size
+    if n == 0:
+        return []
+    if active_mask is None:
+        active = np.ones(n, dtype=bool)
+    else:
+        active = np.asarray(list(active_mask), dtype=bool)
+        if active.size != n:
+            raise ValueError("active_mask length must match values length")
+
+    scores = np.where(np.isfinite(raw) & (raw > 0) & active, raw, 0.0)
+    n_active = int(active.sum())
+    if n_active == 0:
+        return [0.0] * n
+
+    effective_target = min(float(target_sum), float(n_active) * float(max_per_driver))
+    if scores[active].sum() <= 0:
+        scores[active] = 1.0
+
+    # Iterative water-filling / clipping to [0, max_per_driver] summing to effective_target
+    probs = np.zeros(n, dtype=float)
+    free = active.copy()
+    remaining_target = effective_target
+
+    for _ in range(n_active + 2):
+        free_sum = float(scores[free].sum())
+        if free_sum <= 0:
+            n_free = int(free.sum())
+            if n_free > 0:
+                probs[free] = min(max_per_driver, remaining_target / n_free)
+            break
+        scaled = scores[free] / free_sum * remaining_target
+        over = scaled > max_per_driver + 1e-12
+        if not np.any(over):
+            probs[free] = scaled
+            break
+        free_indices = np.flatnonzero(free)
+        capped_indices = free_indices[over]
+        probs[capped_indices] = max_per_driver
+        free[capped_indices] = False
+        remaining_target = max(0.0, effective_target - float(probs[~free & active].sum()))
+        if not np.any(free) or remaining_target <= 0:
+            break
+
+    probs = np.clip(probs, 0.0, max_per_driver)
+    probs[~active] = 0.0
+
+    # Largest-remainder rounding while respecting [0, max_per_driver * scale]
+    scale = 10 ** decimals
+    max_units = int(round(max_per_driver * scale))
+    target_units = int(round(effective_target * scale))
+    exact_units = probs * scale
+    floors = np.floor(exact_units).astype(np.int64)
+    floors = np.clip(floors, 0, max_units)
+    floors[~active] = 0
+
+    diff = int(target_units - floors.sum())
+    frac = exact_units - floors
+    if diff > 0:
+        eligible = np.flatnonzero(active & (floors < max_units))
+        order = eligible[np.argsort(-frac[eligible], kind="stable")]
+        for idx in order:
+            if diff <= 0:
+                break
+            add = min(diff, int(max_units - floors[idx]))
+            if add > 0:
+                floors[idx] += 1
+                diff -= 1
+        # If still remaining due to multiple units gap
+        while diff > 0:
+            eligible = np.flatnonzero(active & (floors < max_units))
+            if eligible.size == 0:
+                break
+            for idx in eligible:
+                if diff <= 0:
+                    break
+                floors[idx] += 1
+                diff -= 1
+    elif diff < 0:
+        need = -diff
+        eligible = np.flatnonzero(active & (floors > 0))
+        order = eligible[np.argsort(frac[eligible], kind="stable")]
+        for idx in order:
+            if need <= 0:
+                break
+            floors[idx] -= 1
+            need -= 1
+
+    return [round(float(u) / scale, decimals) for u in floors]
+
+
 def normalize_within_groups(
-    frame: pd.DataFrame, group_cols: Sequence[str], scores: Sequence[float]
+    frame: pd.DataFrame,
+    group_cols: Sequence[str],
+    scores: Sequence[float],
+    target_sum: float = 3.0,
+    max_prob: float = 1.0,
 ) -> np.ndarray:
-    """Divide each score by its group's sum (probabilities per race/lap)."""
-    data = frame[list(group_cols)].copy()
-    data["_score"] = np.clip(np.asarray(scores, dtype=float), 1e-9, None)
-    totals = data.groupby(list(group_cols), sort=False)["_score"].transform("sum")
-    return (data["_score"] / totals).to_numpy()
+    """Normalise each group's scores to ``target_sum`` (3.0 for podium, 1.0 for win) with clipping at ``max_prob``."""
+    data = frame[list(group_cols)].copy().reset_index(drop=True)
+    raw = np.clip(np.asarray(scores, dtype=float), 1e-9, None)
+    out = np.zeros_like(raw, dtype=float)
+    for _, group_idx in data.groupby(list(group_cols), sort=False).groups.items():
+        idx = np.asarray(list(group_idx), dtype=int)
+        g_scores = raw[idx].copy()
+        n = len(idx)
+        eff_target = min(float(target_sum), float(n) * float(max_prob))
+        probs = np.zeros(n, dtype=float)
+        free = np.ones(n, dtype=bool)
+        rem = eff_target
+        for _ in range(n + 1):
+            s = float(g_scores[free].sum())
+            if s <= 0:
+                if free.any():
+                    probs[free] = min(max_prob, rem / int(free.sum()))
+                break
+            scaled = g_scores[free] / s * rem
+            over = scaled > max_prob + 1e-12
+            if not np.any(over):
+                probs[free] = scaled
+                break
+            f_idx = np.flatnonzero(free)
+            c_idx = f_idx[over]
+            probs[c_idx] = max_prob
+            free[c_idx] = False
+            rem = max(0.0, eff_target - float(probs[~free].sum()))
+            if not free.any() or rem <= 0:
+                break
+        out[idx] = np.clip(probs, 1e-6, max_prob - 1e-6 if max_prob >= 1.0 else max_prob)
+    return out
 
 
 def recency_weights(seasons: Sequence[float], half_life: float) -> np.ndarray:
@@ -349,6 +491,11 @@ def build_pre_race_features(raw: pd.DataFrame) -> pd.DataFrame:
     points = pd.to_numeric(df["points"], errors="coerce").where(completed)
     won = pd.to_numeric(df["won"], errors="coerce").where(completed)
     podium = pd.to_numeric(df["podium"], errors="coerce").where(completed)
+    if "is_podium" in df.columns and df["is_podium"].notna().any():
+        podium = podium.fillna(pd.to_numeric(df["is_podium"], errors="coerce").where(completed))
+    podium = podium.fillna((finish <= 3).astype(float).where(finish.notna()))
+    df["podium"] = podium
+    df["is_podium"] = podium
     dnf = pd.to_numeric(df["dnf"], errors="coerce").where(completed)
 
     field_size = race_group["driver_id"].transform("count").astype(float)
@@ -611,6 +758,12 @@ def build_in_race_features(
         (df["laps_down"] == 0).astype(float).groupby([df[c] for c in group], sort=False).transform("sum")
     )
     df["positions_gained"] = df["grid_position"] - df["position"]
+    if "final_position" in df.columns:
+        fin = pd.to_numeric(df["final_position"], errors="coerce")
+        if "is_podium" not in df.columns or df["is_podium"].isna().all():
+            df["is_podium"] = np.where(fin.notna(), (fin <= 3).astype(int), np.nan)
+        if "podium" not in df.columns or df["podium"].isna().all():
+            df["podium"] = df["is_podium"]
     return df
 
 

@@ -1,13 +1,16 @@
-"""Post-qualifying and live in-race inference.
+"""Post-qualifying and live in-race Top-3 (Podium) inference.
 
-``RacePredictor`` loads the two trained artifacts and produces contract-ready
-objects.  Every probability set is normalised so it sums to exactly 100 %.
+``RacePredictor`` loads ``pre_race_model.joblib`` and ``live_race_model.joblib``
+and produces contract-ready objects:
 
-* :meth:`RacePredictor.predict_post_quali` builds a complete
-  ``post_quali_prediction`` packet (see ``contract/live_packet.json``).
-* :meth:`RacePredictor.predict_live` takes the current driver states of a
-  ``live_race_update`` / ``replay_frame`` and returns the ``predictions``
-  block of that packet.
+* Every driver receives both ``podium_prob_pct`` (primary Top 3 finish
+  probability, ``0.0`` to ``100.0``) and ``win_prob_pct`` (``0.0`` to ``100.0``).
+* ``DNF`` / ``OUT`` / retired drivers receive ``podium_prob_pct = 0.0`` and
+  ``win_prob_pct = 0.0``.
+* Across active drivers, iterative clipping-and-normalization ensures every
+  driver stays within ``[0.0, 100.0]`` and ``podium_prob_pct`` sums to
+  ``300.0%`` (3 podium spots per race), while ``win_prob_pct`` sums to ``100.0%``.
+* Leaderboard items are sorted descending by ``podium_prob_pct``.
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ from ml.features import (
     build_pre_race_features,
     make_in_race_x,
     make_pre_race_x,
+    normalize_podium_to_percent,
     normalize_to_percent,
 )
 from ml.ingest_history import (
@@ -46,8 +50,12 @@ __all__ = [
     "PredictionError",
     "RaceContext",
     "RacePredictor",
+    "is_driver_out",
+    "normalize_podium_to_percent",
     "normalize_to_percent",
 ]
+
+_OUT_STATUSES = frozenset({"DNF", "OUT", "RET", "RETIRED", "DNS", "DSQ", "NC", "WD", "EXCLUDED"})
 
 
 class PredictionError(RuntimeError):
@@ -99,14 +107,43 @@ def _int_or_none(value: Any) -> Optional[int]:
         return None
 
 
+def is_driver_out(driver: Mapping[str, Any]) -> bool:
+    """True when a driver is DNF, OUT, retired, or lacks a valid running position."""
+    if bool(driver.get("retired")) or bool(driver.get("dnf")) or bool(driver.get("out")):
+        return True
+    status = str(driver.get("status") or "").strip().upper()
+    if status in _OUT_STATUSES or status.startswith("DNF") or status.startswith("RET"):
+        return True
+    pos = _int_or_none(driver.get("position"))
+    return pos is None or pos <= 0
+
+
 def load_bundle(path: Path, expected_stage: str) -> Optional[ModelBundle]:
     """Load a joblib artifact, or ``None`` if it does not exist."""
     path = Path(path)
     if not path.exists():
-        return None
+        # Check fallback alias between live_race_model.joblib and in_race_model.joblib
+        if path.name == "live_race_model.joblib":
+            alt = path.parent / "in_race_model.joblib"
+            if alt.exists():
+                path = alt
+            else:
+                return None
+        elif path.name == "in_race_model.joblib":
+            alt = path.parent / "live_race_model.joblib"
+            if alt.exists():
+                path = alt
+            else:
+                return None
+        else:
+            return None
     artifact = joblib.load(path)
-    if artifact.get("stage") != expected_stage:
-        raise PredictionError(f"{path} holds a {artifact.get('stage')!r} model, expected {expected_stage!r}")
+    stage = artifact.get("stage")
+    valid_stages = {expected_stage}
+    if expected_stage in {"in_race", "live_race"}:
+        valid_stages = {"in_race", "live_race"}
+    if stage not in valid_stages:
+        raise PredictionError(f"{path} holds a {stage!r} model, expected {expected_stage!r}")
     return ModelBundle(
         stage=expected_stage,
         model=artifact["model"],
@@ -119,7 +156,7 @@ def load_bundle(path: Path, expected_stage: str) -> Optional[ModelBundle]:
 
 
 class RacePredictor:
-    """Dual-stage (pre-race + live) race-winner predictor."""
+    """Dual-stage (pre-race + live) Top-3 Podium and race-winner predictor."""
 
     def __init__(
         self,
@@ -128,12 +165,13 @@ class RacePredictor:
         openf1: Optional[OpenF1Client] = None,
         pre_race_path: Optional[Path] = None,
         in_race_path: Optional[Path] = None,
+        live_race_path: Optional[Path] = None,
         history_path: Optional[Path] = None,
     ) -> None:
         self.jolpica = jolpica or JolpicaClient()
         self.openf1 = openf1 or OpenF1Client()
         self.pre_race_path = Path(pre_race_path or config.PRE_RACE_MODEL_PATH)
-        self.in_race_path = Path(in_race_path or config.IN_RACE_MODEL_PATH)
+        self.in_race_path = Path(live_race_path or in_race_path or config.LIVE_RACE_MODEL_PATH)
         self.history_path = Path(history_path or config.PRE_RACE_RAW_PATH)
         self._pre: Optional[ModelBundle] = None
         self._in: Optional[ModelBundle] = None
@@ -162,6 +200,7 @@ class RacePredictor:
             return {
                 "name": bundle.name,
                 "version": bundle.version,
+                "target": "is_podium",
                 "trained_at": bundle.trained_at,
                 "validation": bundle.validation,
             }
@@ -189,6 +228,14 @@ class RacePredictor:
     @staticmethod
     def _score(bundle: ModelBundle, X: pd.DataFrame) -> np.ndarray:
         return bundle.model.predict_proba(X.reindex(columns=bundle.features))[:, 1]
+
+    @staticmethod
+    def _win_scores_from_podium(podium_scores: np.ndarray) -> np.ndarray:
+        """Sharpen podium probabilities into relative win scores summing to 100%."""
+        clipped = np.clip(np.asarray(podium_scores, dtype=float), 1e-6, 1.0 - 1e-6)
+        # Odds sharpening: higher podium likelihood concentrates more heavily for P1
+        odds = clipped / (1.0 - clipped)
+        return np.power(odds, 1.35)
 
     # ------------------------------------------------------------------ #
     # Race lookup
@@ -297,7 +344,7 @@ class RacePredictor:
         context: Optional[RaceContext] = None,
         sequence: int = 0,
     ) -> Dict[str, Any]:
-        """Return a ``post_quali_prediction`` packet (contract-valid)."""
+        """Return a ``post_quali_prediction`` packet (contract-valid, Top 3 Podium sorted)."""
         bundle = self._require(self._pre, "pre-race")
         if context is None:
             if season is None or round_number is None:
@@ -305,11 +352,21 @@ class RacePredictor:
             context = self.build_race_context(season, round_number)
 
         table = context.features
-        scores = self._score(bundle, make_pre_race_x(table))
-        percents = normalize_to_percent(scores, config.PROBABILITY_DECIMALS)
+        raw_scores = self._score(bundle, make_pre_race_x(table))
+        podium_pcts = normalize_podium_to_percent(
+            raw_scores,
+            active_mask=[True] * len(table),
+            decimals=config.PROBABILITY_DECIMALS,
+            target_sum=300.0,
+            max_per_driver=100.0,
+        )
+        win_pcts = normalize_to_percent(
+            self._win_scores_from_podium(raw_scores),
+            decimals=config.PROBABILITY_DECIMALS,
+        )
 
         entries: List[Dict[str, Any]] = []
-        for (_, row), pct in zip(table.iterrows(), percents):
+        for (_, row), podium_pct, win_pct in zip(table.iterrows(), podium_pcts, win_pcts):
             entries.append(
                 {
                     "driver_number": _int_or_none(row.get("driver_number")) or 0,
@@ -317,12 +374,17 @@ class RacePredictor:
                     "full_name": str(row.get("driver_name") or row.get("driver_code") or ""),
                     "team_name": str(row.get("constructor_name") or ""),
                     "grid_position": max(1, _int_or_none(row.get("grid_position")) or 1),
-                    "win_probability_pct": pct,
+                    "podium_prob_pct": float(podium_pct),
+                    "win_prob_pct": float(win_pct),
+                    "win_probability_pct": float(win_pct),
                 }
             )
-        entries.sort(key=lambda e: (-e["win_probability_pct"], e["grid_position"]))
+        entries.sort(key=lambda e: (-e["podium_prob_pct"], -e["win_prob_pct"], e["grid_position"]))
         for rank, entry in enumerate(entries, start=1):
             entry["rank"] = rank
+
+        sum_podium = round(float(sum(e["podium_prob_pct"] for e in entries)), config.PROBABILITY_DECIMALS)
+        sum_win = round(float(sum(e["win_prob_pct"] for e in entries)), config.PROBABILITY_DECIMALS)
 
         return {
             "schema_version": config.SCHEMA_VERSION,
@@ -342,13 +404,16 @@ class RacePredictor:
             "grid_source": context.grid_source,
             "predictions": {
                 "stage": "pre_race",
+                "target": "top3_podium",
                 "model_name": bundle.name,
                 "model_version": bundle.version,
                 "trained_at": bundle.trained_at,
                 "generated_at": _now_iso(),
                 "validation": {k: v for k, v in bundle.validation.items() if isinstance(v, (int, float)) or v is None},
                 "items": entries,
-                "sum_pct": 100.0,
+                "sum_podium_pct": sum_podium,
+                "sum_win_pct": sum_win,
+                "sum_pct": sum_podium,
             },
         }
 
@@ -366,12 +431,12 @@ class RacePredictor:
         pace_by_driver: Optional[Mapping[int, float]] = None,
         ref_lap_s: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Win probabilities for the current race state.
+        """Top-3 Podium & Win probabilities for the current race state.
 
-        ``drivers`` are contract ``DriverState`` dictionaries.  Retired cars (or
-        cars without a position) get 0 %; the rest sum to exactly 100 %.
-        ``pace_by_driver`` optionally supplies the rolling clean 3-lap pace in
-        seconds (falls back to ``last_lap_time_s``).
+        ``drivers`` are contract ``DriverState`` dictionaries.  Retired / DNF /
+        OUT cars (or cars without a position) get ``0.0%``; active drivers are
+        clipped to ``[0.0, 100.0]`` and normalized so ``podium_prob_pct`` sums
+        to ``300.0%`` and ``win_prob_pct`` sums to ``100.0%``.
         """
         bundle = self._require(self._in, "in-race")
         state_code = (
@@ -382,7 +447,7 @@ class RacePredictor:
 
         active: List[Mapping[str, Any]] = []
         for driver in drivers:
-            if driver.get("retired") or _int_or_none(driver.get("position")) is None:
+            if is_driver_out(driver):
                 continue
             active.append(driver)
         if not active:
@@ -423,29 +488,62 @@ class RacePredictor:
             )
         snapshot = pd.DataFrame(rows)
         features = build_in_race_features(snapshot, context.features)
-        scores = self._score(bundle, make_in_race_x(features))
-        percents = normalize_to_percent(scores, config.PROBABILITY_DECIMALS)
+        raw_scores = self._score(bundle, make_in_race_x(features))
 
-        by_number = {int(n): pct for n, pct in zip(features["driver_number"], percents)}
+        podium_pcts = normalize_podium_to_percent(
+            raw_scores,
+            active_mask=[True] * len(features),
+            decimals=config.PROBABILITY_DECIMALS,
+            target_sum=300.0,
+            max_per_driver=100.0,
+        )
+        win_pcts = normalize_to_percent(
+            self._win_scores_from_podium(raw_scores),
+            decimals=config.PROBABILITY_DECIMALS,
+        )
+
+        podium_by_number = {int(n): float(pct) for n, pct in zip(features["driver_number"], podium_pcts)}
+        win_by_number = {int(n): float(pct) for n, pct in zip(features["driver_number"], win_pcts)}
         code_by_number = {int(n): c for n, c in zip(features["driver_number"], features["driver_code"])}
+
         items: List[Dict[str, Any]] = []
         for driver in drivers:
             number = _int_or_none(driver.get("driver_number"))
             if number is None:
                 continue
-            items.append(
-                {
-                    "driver_number": number,
-                    "driver_code": str(driver.get("code") or code_by_number.get(number) or number),
-                    "win_probability_pct": by_number.get(number, 0.0),
-                }
-            )
-        items.sort(key=lambda item: -item["win_probability_pct"])
+            out = is_driver_out(driver)
+            p_pct = 0.0 if out else podium_by_number.get(number, 0.0)
+            w_pct = 0.0 if out else win_by_number.get(number, 0.0)
+            item: Dict[str, Any] = {
+                "driver_number": number,
+                "driver_code": str(driver.get("code") or code_by_number.get(number) or number),
+                "podium_prob_pct": p_pct,
+                "win_prob_pct": w_pct,
+                "win_probability_pct": w_pct,
+            }
+            if driver.get("full_name"):
+                item["full_name"] = str(driver["full_name"])
+            if driver.get("team_name"):
+                item["team_name"] = str(driver["team_name"])
+            if driver.get("team_colour"):
+                item["team_colour"] = str(driver["team_colour"])
+            items.append(item)
+
+        items.sort(key=lambda item: (-item["podium_prob_pct"], -item["win_prob_pct"], item["driver_number"]))
+        for rank, item in enumerate(items, start=1):
+            item["rank"] = rank
+
+        sum_podium = round(float(sum(i["podium_prob_pct"] for i in items)), config.PROBABILITY_DECIMALS)
+        sum_win = round(float(sum(i["win_prob_pct"] for i in items)), config.PROBABILITY_DECIMALS)
+
         return {
             "stage": "in_race",
+            "target": "top3_podium",
             "model_version": bundle.version,
             "generated_at": _now_iso(),
             "lap": int(lap),
             "items": items,
-            "sum_pct": 100.0,
+            "sum_podium_pct": sum_podium,
+            "sum_win_pct": sum_win,
+            "sum_pct": sum_podium,
         }

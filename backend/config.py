@@ -84,7 +84,8 @@ ARTIFACT_DIR: Path = Path(
     _env_str("F1_ARTIFACT_DIR", str(BACKEND_DIR / "ml" / "artifacts"))
 )
 PRE_RACE_MODEL_PATH: Path = ARTIFACT_DIR / "pre_race_model.joblib"
-IN_RACE_MODEL_PATH: Path = ARTIFACT_DIR / "in_race_model.joblib"
+LIVE_RACE_MODEL_PATH: Path = ARTIFACT_DIR / "live_race_model.joblib"
+IN_RACE_MODEL_PATH: Path = LIVE_RACE_MODEL_PATH
 METRICS_PATH: Path = ARTIFACT_DIR / "metrics.json"
 
 
@@ -150,18 +151,20 @@ FIRST_LIVE_SNAPSHOT_LAP: int = 2
 # --------------------------------------------------------------------------- #
 # Tyre degradation (Stage 2)
 # --------------------------------------------------------------------------- #
+TYRE_DEG_MIN_LAPS: int = _env_int("F1_TYRE_DEG_MIN_LAPS", 4)
 TYRE_DEG_WINDOW_LAPS: int = _env_int("F1_TYRE_DEG_WINDOW_LAPS", 8)
+FUEL_BURN_CORRECTION_S_PER_LAP: float = _env_float("F1_FUEL_BURN_CORRECTION_S_PER_LAP", 0.035)
 FUEL_START_KG: float = _env_float("F1_FUEL_START_KG", 100.0)
-FUEL_EFFECT_S_PER_KG: float = _env_float("F1_FUEL_EFFECT_S_PER_KG", 0.03)
+FUEL_EFFECT_S_PER_KG: float = _env_float("F1_FUEL_EFFECT_S_PER_KG", 0.035)
 
 
 # --------------------------------------------------------------------------- #
 # Server / replay (Stage 2 + 3)
 # --------------------------------------------------------------------------- #
-SERVER_HOST: str = _env_str("F1_SERVER_HOST", "127.0.0.1")
+SERVER_HOST: str = _env_str("F1_SERVER_HOST", "0.0.0.0")
 SERVER_PORT: int = _env_int("F1_SERVER_PORT", 8000)
 REPLAY_DEFAULT_SPEED: float = _env_float("F1_REPLAY_SPEED", 1.0)
-REPLAY_TICK_S: float = _env_float("F1_REPLAY_TICK_S", 1.0)
+REPLAY_TICK_S: float = _env_float("F1_REPLAY_TICK_S", 0.25)
 RACE_CONTROL_TAIL: int = _env_int("F1_RACE_CONTROL_TAIL", 15)
 ALLOW_LIVE_NETWORK: bool = _env_bool("F1_ALLOW_LIVE_NETWORK", True)
 

@@ -129,8 +129,10 @@ def _make_row(
         row["status"] = status
         row["points"] = _float_or_none(result.get("points"))
         row["laps_completed"] = _int_or_none(result.get("laps"))
+        is_podium = 1 if finish is not None and finish <= 3 else 0
         row["won"] = 1 if finish == 1 else 0
-        row["podium"] = 1 if finish is not None and finish <= 3 else 0
+        row["podium"] = is_podium
+        row["is_podium"] = is_podium
         row["dnf"] = 0 if is_classified_status(status) else 1
         row["completed"] = True
     else:
@@ -143,6 +145,7 @@ def _make_row(
         row["laps_completed"] = None
         row["won"] = None
         row["podium"] = None
+        row["is_podium"] = None
         row["dnf"] = None
         row["completed"] = False
     return row
@@ -426,9 +429,18 @@ def build_race_snapshots(
         return empty
 
     winners = {number for number, info in results.items() if info["position"] == 1}
+    podium_finishers = {
+        number for number, info in results.items() if info["position"] is not None and info["position"] <= 3
+    }
     if not winners:
         last = valid.sort_values(["lap_number", "lap_end_s"], ascending=[False, True])
         winners = {int(last.iloc[0]["driver_number"])}
+    if not podium_finishers:
+        last_by_driver = (
+            valid.sort_values(["lap_number", "lap_end_s"], ascending=[False, True])
+            .drop_duplicates("driver_number", keep="first")
+        )
+        podium_finishers = {int(n) for n in last_by_driver.iloc[:3]["driver_number"].tolist()}
     retired = {number for number, info in results.items() if info["retired"]}
 
     per_driver: Dict[int, Dict[str, np.ndarray]] = {}
@@ -569,6 +581,13 @@ def build_race_snapshots(
         lambda n: (results.get(int(n)) or {}).get("position")
     )
     request["won"] = request["driver_number"].isin(winners).astype(int)
+    podium_col = np.where(
+        request["final_position"].notna(),
+        (pd.to_numeric(request["final_position"], errors="coerce") <= 3).astype(int),
+        request["driver_number"].isin(podium_finishers).astype(int),
+    )
+    request["podium"] = podium_col
+    request["is_podium"] = podium_col
     return (
         request[SNAPSHOT_COLUMNS]
         .sort_values(["lap", "position"], kind="mergesort")
