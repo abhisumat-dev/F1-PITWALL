@@ -862,6 +862,14 @@ class SignalRLiveProvider(BaseStreamProvider):
             "predictions": predictions,
         }
 
+        session_status = str(session.get("SessionStatus") or "").strip()
+        archive_status = str((session.get("ArchiveStatus") or {}).get("Status") or "").strip()
+        is_finished_archive = (
+            session_status.lower() in {"finalised", "ends", "ended", "inactive"}
+            or archive_status.lower() == "complete"
+        )
+        session_active = bool(drivers_out) and not is_finished_archive
+
         return {
             "schema_version": config.SCHEMA_VERSION,
             "type": "live_race_update",
@@ -870,6 +878,8 @@ class SignalRLiveProvider(BaseStreamProvider):
             "source": "signalr_live",
             "mode": "free_live",
             "telemetry_unlocked": self.telemetry_unlocked,
+            "session_active": session_active,
+            "session_status": session_status or ("Started" if session_active else "Idle"),
             "capabilities": {
                 "gps_available": gps_available,
                 "telemetry_available": telemetry_available,
@@ -932,6 +942,8 @@ class SignalRLiveProvider(BaseStreamProvider):
                         "driver_avg_finish_5": float(d.get("position") or 10),
                         "team_points_avg_5": 10.0,
                         "team_win_rate_10": 0.05,
+                        "team_points_momentum": 0.0,
+                        "team_quali_improvement_slope": 0.0,
                     }
                     for d in drivers
                 ]

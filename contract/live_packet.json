@@ -561,6 +561,14 @@
           "type": "boolean",
           "description": "True when F1_LIVE_TOKEN is set and Position.z / CarData.z were decoded."
         },
+        "session_active": {
+          "type": "boolean",
+          "description": "True when an F1 session is actively running on track; false when SignalR is idle / serving a finalised past session."
+        },
+        "session_status": {
+          "type": ["string", "null"],
+          "description": "Raw SignalR SessionStatus string (e.g. Started, Finalised, Ends, Inactive)."
+        },
         "capabilities": { "$ref": "#/$defs/Capabilities" },
         "meeting_key": { "type": ["integer", "null"] },
         "session_key": { "type": ["integer", "null"] },

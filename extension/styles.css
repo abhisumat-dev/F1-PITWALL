@@ -146,6 +146,9 @@ button, a.tab-btn, a.btn-primary, a.btn-secondary, a.race-launch-row, a.circuit-
 button:active, a.tab-btn:active, a.btn-primary:active, a.btn-secondary:active {
   transform: scale(0.97);
 }
+button.timing-row:active {
+  transform: none;
+}
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
   outline: 2px solid var(--fia-cyan);
   outline-offset: 2px;
@@ -672,6 +675,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   white-space: nowrap;
   flex-shrink: 0;
 }
+.race-launch-row.is-upcoming {
+  cursor: default;
+  opacity: 0.72;
+}
+.race-upcoming-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #94A3B8;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(100, 116, 139, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 /* 24 Circuits Grid */
 .header-search-wrap { width: min(280px, 100%); }
@@ -716,6 +736,111 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   align-items: center;
   gap: 8px;
   flex: 1 1 380px;
+}
+.strip-sub-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.strip-status-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.live-badge-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  background: rgba(225, 6, 0, 0.16);
+  border: 1px solid rgba(225, 6, 0, 0.45);
+  color: #FCA5A5;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.race-podium-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.race-podium-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--bg-control);
+  border: 1px solid var(--border-subtle);
+  border-left-width: 4px;
+}
+.race-podium-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.race-podium-pos {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fia-yellow);
+  min-width: 26px;
+}
+.race-podium-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.race-podium-gap {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+.race-podium-pts {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fia-green);
+}
+
+/* Idle Live Mode — Next Race Schedule Card */
+.live-idle-banner {
+  padding: 14px 18px;
+  background: rgba(250, 204, 21, 0.06);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.live-idle-copy {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-secondary);
+}
+.live-idle-next-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.live-idle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--bg-control);
 }
 .strip-transport {
   display: flex;
@@ -796,7 +921,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 /* Race Results / Classification Table */
 .results-col-head, .results-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 48px 72px 62px;
+  grid-template-columns: 28px minmax(0, 1fr) 36px 46px 66px 64px;
   align-items: center;
   gap: 6px;
   padding: 10px 12px;
@@ -980,8 +1105,153 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .wf-bar { width: 2.5px; border-radius: 1.5px; background: var(--fia-cyan); opacity: 0.78; }
 
 /* ==========================================================================
-   PAGE 3: DEDICATED POST-QUALIFYING PREDICTIONS
+   PAGE 3: DEDICATED POST-QUALIFYING PREDICTIONS + ROTATING HOURGLASS + CAR CURVE
    ========================================================================== */
+.pred-workspace-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 480px;
+}
+
+.pred-loading-overlay {
+  position: fixed;
+  top: 58px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  background: rgba(7, 9, 13, 0.78);
+  backdrop-filter: blur(5px);
+  transition: opacity 220ms var(--ease-out);
+}
+
+.pred-loading-card {
+  width: min(460px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 26px 24px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.6);
+}
+
+.hourglass-spinner {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(225, 6, 0, 0.14);
+  border: 1px solid rgba(225, 6, 0, 0.45);
+  color: var(--fia-yellow);
+}
+.hourglass-spinner svg {
+  animation: hourglass-flip 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  will-change: transform;
+}
+@keyframes hourglass-flip {
+  0% { transform: rotate(0deg); }
+  45% { transform: rotate(180deg); }
+  55% { transform: rotate(180deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.pred-loading-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+.pred-loading-step {
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+  min-height: 20px;
+}
+.pred-loading-bar-track {
+  width: 100%;
+  height: 6px;
+  background: #141B29;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+.pred-loading-bar-fill {
+  height: 100%;
+  width: 8%;
+  background: var(--accent-f1);
+  border-radius: 999px;
+  transition: width 180ms linear;
+}
+.pred-loading-meta {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.car-dev-block {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.car-dev-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.car-dev-chart {
+  width: 100%;
+  height: 148px;
+  background: var(--bg-control);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 6px 8px;
+}
+.car-dev-chart svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.car-dev-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.car-dev-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-control);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-secondary);
+}
+.car-dev-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.car-dev-delta.up { color: var(--fia-green); font-weight: 700; }
+.car-dev-delta.down { color: var(--ink-dim); }
+
 .podium-hero-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
 .podium-card {
   display: flex;
@@ -1025,15 +1295,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .pred-bar-track { height: 7px; background: #141A26; border-radius: 4px; overflow: hidden; }
 .pred-bar-fill { height: 100%; border-radius: 4px; }
 
-.pred-circuit-canvas-wrap { padding: 16px 18px; border-bottom: 1px solid var(--border-subtle); }
-#pred-circuit-canvas { width: 100%; height: 220px; display: block; }
-.pred-circuit-caption { margin: 10px 0 0; font-size: 12px; text-align: center; }
-
-.feature-weights-block { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.pred-circuit-canvas-wrap { padding: 22px 18px 18px; }
+#pred-circuit-canvas { width: 100%; height: 320px; display: block; }
+.pred-circuit-caption { margin: 12px 0 0; font-size: 12px; text-align: center; }
 .sub-heading { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink-primary); }
-.weights-list { display: flex; flex-direction: column; gap: 12px; }
-.weight-item { display: flex; flex-direction: column; gap: 5px; }
-.weight-top { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-secondary); }
 
 /* ==========================================================================
    Slide-Over Full Race Control & Team Radio Drawer
@@ -1143,8 +1408,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (hover: hover) and (pointer: fine) {
   .tab-btn:hover:not(.is-active) { color: var(--ink-primary); background: rgba(255, 255, 255, 0.05); }
-  .circuit-item:hover, .race-launch-row:hover { border-color: var(--border-strong); background: #111622; }
-  .timing-row:hover { background: rgba(255, 255, 255, 0.04); }
+  .circuit-item:hover, a.race-launch-row:hover { border-color: var(--border-strong); background: #111622; }
+  .timing-row { transition: none; }
+  .timing-row:hover { background: rgba(255, 255, 255, 0.05); }
   .icon-btn:hover, .btn-ghost-sm:hover, .btn-secondary:hover, .close-sm-btn:hover, .radio-play-btn:hover {
     border-color: var(--border-strong);
     color: var(--ink-primary);
@@ -1153,12 +1419,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* ==========================================================================
-   Desktop Expansion (>= 980px) — Generous 2-Column Grids
+   Medium Resizable Companion Window (680px - 979px)
+   ========================================================================== */
+@media (min-width: 680px) and (max-width: 979px) {
+  .podium-hero-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .comms-split-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .canvas-stage-lg { height: 320px; }
+}
+
+/* ==========================================================================
+   Desktop & Full-Screen Expansion (>= 980px) — Generous 2-Column Grids
    ========================================================================== */
 @media (min-width: 980px) {
   .top-bar { flex-wrap: nowrap; padding: 10px 24px; height: 58px; }
   .top-bar-right { flex-wrap: nowrap; gap: 10px; flex-shrink: 0; }
-  .results-col-head, .results-row { grid-template-columns: 36px minmax(0, 1fr) 58px 84px 76px; gap: 10px; padding: 10px 16px; }
+  .results-col-head, .results-row { grid-template-columns: 32px minmax(0, 1fr) 44px 56px 80px 80px; gap: 8px; padding: 10px 16px; }
   .screen-tabs { width: auto; order: 0; }
   .tab-btn { flex: 0 0 auto; padding: 6px 14px; }
   .tab-label-full { display: inline; }

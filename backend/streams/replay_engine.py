@@ -274,26 +274,44 @@ class ReplayEngine(BaseStreamProvider):
     # Session loading
     # ------------------------------------------------------------------ #
     def list_available_sessions(self, year: int = 2026) -> List[Dict[str, Any]]:
-        """List non-cancelled OpenF1 Race sessions for ``year`` (2023-2026)."""
+        """List non-cancelled OpenF1 Race sessions for ``year`` (2023-2026).
+
+        Sequential ``round`` numbering is computed *after* skipping cancelled
+        rounds so OpenF1 round indices align 1-to-1 with Jolpica's calendar
+        (e.g. 2026 Miami = Round 4, Monaco = Round 6, Las Vegas = Round 21).
+        """
         races = self.openf1.list_races(year)
         meeting_by_key = {int(m["meeting_key"]): m for m in races if m.get("meeting_key") is not None}
         sessions = self.openf1.get_sessions(year=year, session_name="Race")
+        now_iso = _now_iso()
         out: List[Dict[str, Any]] = []
-        for idx, session in enumerate(sessions, start=1):
+        for session in sessions:
             mk = _int_or_none(session.get("meeting_key"))
             if mk is None or mk not in meeting_by_key:
                 continue
             meeting = meeting_by_key[mk]
+            round_num = len(out) + 1
+            gp_name = str(meeting.get("meeting_name") or session.get("location") or f"Round {round_num}")
+            circuit_name = str(session.get("circuit_short_name") or meeting.get("circuit_short_name") or "")
+            date_end = session.get("date_end")
+            completed = bool(date_end and str(date_end) <= now_iso)
+            c2d = resolve_circuit_2d(
+                circuit_key=session.get("circuit_key") or meeting.get("circuit_key"),
+                name=circuit_name,
+                grand_prix=gp_name,
+            )
             out.append(
                 {
                     "session_key": _int_or_none(session.get("session_key")),
                     "meeting_key": mk,
                     "season": int(year),
-                    "round": idx,
-                    "grand_prix": str(meeting.get("meeting_name") or session.get("location") or f"Round {idx}"),
-                    "circuit_name": str(session.get("circuit_short_name") or meeting.get("circuit_short_name") or ""),
+                    "round": round_num,
+                    "grand_prix": gp_name,
+                    "circuit_name": circuit_name,
+                    "circuit_slug": c2d.get("slug") if c2d else None,
                     "date_start": session.get("date_start"),
-                    "date_end": session.get("date_end"),
+                    "date_end": date_end,
+                    "completed": completed,
                     "is_cancelled": bool(meeting.get("is_cancelled", False)),
                 }
             )

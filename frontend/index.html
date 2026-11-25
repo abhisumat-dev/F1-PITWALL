@@ -10,7 +10,7 @@
   <title>F1 Pit-Wall — Standings &amp; Race Calendar</title>
   <link rel="manifest" href="pwa-manifest.json" />
   <link rel="icon" type="image/png" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=8" />
 </head>
 <body data-page="standings">
   <div class="app-shell">
@@ -26,8 +26,8 @@
             <span class="tab-label-short">Standings</span>
           </a>
           <a href="live.html" class="tab-btn">
-            <span class="tab-label-full">Live &amp; Race Replay</span>
-            <span class="tab-label-short">Live / Replay</span>
+            <span class="tab-label-full">Live &amp; Race Results</span>
+            <span class="tab-label-short">Live / Results</span>
           </a>
           <a href="predictions.html" class="tab-btn">
             <span class="tab-label-full">Post-Quali Predictions</span>
@@ -40,6 +40,21 @@
         <div id="session-pill" class="session-pill">
           <span id="session-pill-text">Loading 2026 Calendar...</span>
         </div>
+        <button type="button" id="btn-float-window" class="icon-btn" aria-label="Open resizable companion window" title="Open Resizable Companion Window">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+        <button type="button" id="btn-fullscreen" class="icon-btn" aria-label="Toggle full screen" title="Toggle Full Screen">
+          <svg id="fullscreen-icon-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
         <button type="button" id="btn-settings" class="icon-btn" aria-label="Server settings" aria-expanded="false" aria-controls="settings-popover" title="Connection Settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
@@ -71,10 +86,10 @@
       <div class="page-head">
         <div>
           <h1 class="page-title">Championship Standings &amp; Race Calendar</h1>
-          <p class="page-subtitle">Full 22-driver WDC &amp; 11-team WCC tables, upcoming session times in IST / UK / US, and completed race replays.</p>
+          <p class="page-subtitle">Full 22-driver WDC &amp; 11-team WCC tables, upcoming session times in IST / UK / US, and final race standings.</p>
         </div>
         <div class="page-actions">
-          <a href="live.html" class="btn-primary">Open Live &amp; Replay Pit-Wall</a>
+          <a href="live.html" class="btn-primary">Open Live &amp; Race Results</a>
           <a href="predictions.html" class="btn-secondary">Post-Quali Predictions</a>
         </div>
       </div>
@@ -130,8 +145,8 @@
 
           <section class="panel">
             <header class="panel-header">
-              <h2 class="panel-title">Watch Past Race Replays &amp; Results</h2>
-              <select id="season-replay-year" class="ctrl-input-sm" aria-label="Replay season year">
+              <h2 class="panel-title">Season Race Results &amp; Schedule</h2>
+              <select id="season-replay-year" class="ctrl-input-sm" aria-label="Season year">
                 <option value="2026">2026</option>
                 <option value="2025">2025</option>
                 <option value="2024">2024</option>
@@ -143,11 +158,11 @@
         </div>
       </div>
 
-      <!-- Full-Width Spacious 24 Official F1 2D Circuits Grid -->
+      <!-- Full-Width Spacious Official F1 2D Circuits Grid -->
       <section class="panel">
         <header class="panel-header">
           <div class="circuit-head-left">
-            <h2 class="panel-title">24 Official F1 2D Circuits</h2>
+            <h2 class="panel-title">26 Official F1 2D Circuits</h2>
             <span class="meta-chip accent-green">S1 · S2 · S3 Geometry</span>
           </div>
           <div class="header-search-wrap">
@@ -159,8 +174,8 @@
     </main>
   </div>
 
-  <script src="circuits_data.js?v=4"></script>
-  <script src="track_canvas.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="circuits_data.js?v=8"></script>
+  <script src="track_canvas.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

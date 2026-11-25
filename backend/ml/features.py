@@ -108,6 +108,11 @@ PRE_RACE_FEATURES: List[str] = [
     "team_win_rate_10",
     "team_best_finish_avg_5",
     "team_quali_gap_avg_5",
+    "team_quali_improvement_slope",
+    "team_points_momentum",
+    "team_finish_improvement",
+    "current_quali_vs_team_baseline",
+    "driver_finish_momentum",
     "driver_circuit_avg_finish",
     "driver_circuit_wins",
     "driver_circuit_starts",
@@ -125,6 +130,8 @@ PRIOR_FEATURES: List[str] = [
     "driver_avg_finish_5",
     "team_points_avg_5",
     "team_win_rate_10",
+    "team_points_momentum",
+    "team_quali_improvement_slope",
 ]
 
 IN_RACE_FEATURES: List[str] = [
@@ -160,6 +167,8 @@ IN_RACE_FEATURES: List[str] = [
     "driver_avg_finish_5",
     "team_points_avg_5",
     "team_win_rate_10",
+    "team_points_momentum",
+    "team_quali_improvement_slope",
 ]
 
 #: Numeric track-state codes used by the in-race model.
@@ -530,6 +539,9 @@ def build_pre_race_features(raw: pd.DataFrame) -> pd.DataFrame:
     # Driver form ---------------------------------------------------------------
     by_driver = df["driver_id"]
     df["driver_avg_finish_5"] = _prior_rolling_mean(df["_finish"], by_driver, 5)
+    drv_finish_3 = _prior_rolling_mean(df["_finish"], by_driver, 3)
+    drv_finish_8 = _prior_rolling_mean(df["_finish"], by_driver, 8)
+    df["driver_finish_momentum"] = (drv_finish_8 - drv_finish_3).fillna(0.0)
     df["driver_avg_grid_5"] = _prior_rolling_mean(df["_grid_hist"], by_driver, 5)
     df["driver_win_rate_10"] = _prior_rolling_mean(won, by_driver, 10)
     df["driver_podium_rate_10"] = _prior_rolling_mean(podium, by_driver, 10)
@@ -576,15 +588,39 @@ def build_pre_race_features(raw: pd.DataFrame) -> pd.DataFrame:
     team["team_points_avg_5"] = team_group["team_points"].transform(
         lambda s: s.shift(1).rolling(5, min_periods=1).mean()
     )
+    team_pts_3 = team_group["team_points"].transform(
+        lambda s: s.shift(1).rolling(3, min_periods=1).mean()
+    )
+    team_pts_8 = team_group["team_points"].transform(
+        lambda s: s.shift(1).rolling(8, min_periods=1).mean()
+    )
+    team["team_points_momentum"] = (team_pts_3 - team_pts_8).fillna(0.0)
+
     team["team_win_rate_10"] = team_group["team_wins"].transform(
         lambda s: s.shift(1).rolling(10, min_periods=1).mean()
     )
     team["team_best_finish_avg_5"] = team_group["team_best_finish"].transform(
         lambda s: s.shift(1).rolling(5, min_periods=1).mean()
     )
+    team_fin_3 = team_group["team_best_finish"].transform(
+        lambda s: s.shift(1).rolling(3, min_periods=1).mean()
+    )
+    team_fin_8 = team_group["team_best_finish"].transform(
+        lambda s: s.shift(1).rolling(8, min_periods=1).mean()
+    )
+    team["team_finish_improvement"] = (team_fin_8 - team_fin_3).fillna(0.0)
+
     team["team_quali_gap_avg_5"] = team_group["team_gap"].transform(
         lambda s: s.shift(1).rolling(5, min_periods=1).mean()
     )
+    team_gap_3 = team_group["team_gap"].transform(
+        lambda s: s.shift(1).rolling(3, min_periods=1).mean()
+    )
+    team_gap_8 = team_group["team_gap"].transform(
+        lambda s: s.shift(1).rolling(8, min_periods=1).mean()
+    )
+    team["team_quali_improvement_slope"] = (team_gap_8 - team_gap_3).fillna(0.0)
+
     df = df.merge(
         team[
             [
@@ -595,11 +631,17 @@ def build_pre_race_features(raw: pd.DataFrame) -> pd.DataFrame:
                 "team_win_rate_10",
                 "team_best_finish_avg_5",
                 "team_quali_gap_avg_5",
+                "team_quali_improvement_slope",
+                "team_points_momentum",
+                "team_finish_improvement",
             ]
         ],
         on=["constructor_id", "season", "round"],
         how="left",
     )
+    df["current_quali_vs_team_baseline"] = (
+        df["team_quali_gap_avg_5"] - df["quali_gap_to_pole_pct"]
+    ).fillna(0.0)
 
     # Within-race relative strength ------------------------------------------------------------
     race_group = df.groupby(["season", "round"], sort=False)

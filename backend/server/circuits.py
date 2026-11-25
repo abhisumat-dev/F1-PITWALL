@@ -56,7 +56,12 @@ CIRCUIT_ALIASES: Dict[str, str] = {
     "mexico": "mexico_city",
     "interlagos": "interlagos",
     "sao_paulo": "interlagos",
-    "madrid": "madrid",
+    "madring": "madring",
+    "madrid": "madring",
+    "spanish": "madring",
+    "sepang": "sepang",
+    "kuala_lumpur": "sepang",
+    "malaysia": "sepang",
 }
 
 __all__ = ["load_circuits_catalog", "list_circuits_summary", "resolve_circuit_2d"]

@@ -3,7 +3,7 @@
  *
  * Detects active page via `document.body.dataset.page`:
  *   - "standings"   (index.html / sidepanel.html)
- *   - "live"        (live.html — Live SignalR + Past Race Replays & Results)
+ *   - "live"        (live.html — Past Race Final Standings + Live Race Movement)
  *   - "predictions" (predictions.html — Dedicated Post-Quali Top-3 Forecast)
  */
 (function () {
@@ -73,7 +73,8 @@
     return "#64748B";
   }
 
-  function fmtLap(sec) {
+  function fmtLap(sec, fallbackStr) {
+    if (fallbackStr) return fallbackStr;
     if (typeof sec !== "number" || !Number.isFinite(sec) || sec <= 0) return "--";
     const mins = Math.floor(sec / 60);
     const rem = sec - mins * 60;
@@ -81,6 +82,11 @@
   }
 
   function fmtGap(d) {
+    if (d.gap_display) {
+      if (d.retired) return { text: d.gap_display, cls: "is-out" };
+      if (d.position === 1) return { text: d.gap_display, cls: "" };
+      return { text: d.gap_display, cls: "" };
+    }
     if (d.retired) return { text: "DNF", cls: "is-out" };
     if (d.in_pit) return { text: "PIT", cls: "is-pit" };
     if (d.position === 1) return { text: "LEADER", cls: "" };
@@ -98,9 +104,16 @@
     return d.toISOString().slice(11, 19);
   }
 
+  function formatCircuitHeading(raw) {
+    const s = String(raw || "Circuit").trim();
+    return /(circuit|autodrome|autodromo|autódromo|ring|park|madring)$/i.test(s) ? s : `${s} Circuit`;
+  }
+
   function buildStintTimelineSvg(driver, lapCurrent, lapTotal) {
     const total = Math.max(10, Number(lapTotal) || 50);
-    const curLap = Math.max(1, Math.min(total, Number(lapCurrent) || 1));
+    const maxLapForDriver = driver.laps_completed != null
+      ? Math.max(1, Math.min(total, Number(driver.laps_completed)))
+      : Math.max(1, Math.min(total, Number(lapCurrent) || total));
     const W = 250;
     const H = 24;
     const pxPerLap = (W - 16) / total;
@@ -117,7 +130,7 @@
           stint_number: 1,
           compound: (driver.tyre && driver.tyre.compound) || "UNKNOWN",
           lap_start: 1,
-          lap_end: curLap,
+          lap_end: maxLapForDriver,
           tyre_age_at_start: 0,
         }];
 
@@ -132,8 +145,8 @@
         ? Number(st.lap_end)
         : nextSt && nextSt.lap_start
         ? Math.max(sLap, Number(nextSt.lap_start) - 1)
-        : curLap;
-      eLap = Math.max(sLap, Math.min(curLap, total, eLap));
+        : maxLapForDriver;
+      eLap = Math.max(sLap, Math.min(maxLapForDriver, total, eLap));
 
       const x1 = 8 + (sLap - 1) * pxPerLap;
       const x2 = Math.max(x1 + 15, 8 + eLap * pxPerLap);
@@ -157,15 +170,16 @@
   }
 
   /* ------------------------------------------------------------------------
-     Shared Settings Popover Binding
+     Shared State & Settings Popover
      ------------------------------------------------------------------------ */
   const state = {
     page: document.body.dataset.page || "standings",
     apiBase: resolveApiBase(),
-    mode: "replay",
+    viewMode: "results", // "results" (final standings after final lap) | "live" (live race feed)
     syncDelayS: Number(localStorage.getItem(STORAGE_KEY_DELAY) || 0),
     delayBuffer: [],
-    latestPacket: null,
+    latestLivePacket: null,
+    latestResultsData: null,
     selectedDriverA: 1,
     selectedDriverB: 4,
     drawerFilter: "all",
@@ -175,7 +189,8 @@
     currentlyPlayingUrl: null,
     ws: null,
     wsReconnectTimer: null,
-    fixtureOverride: null,
+    sessionsCache: [],
+    nextRaceCache: null,
   };
 
   function bindSettingsPopover(onHostSaved) {
@@ -230,11 +245,88 @@
     });
   }
 
+  function bindWindowControls() {
+    const floatBtn = $("btn-float-window");
+    const fsBtn = $("btn-fullscreen");
+    const fsSvg = $("fullscreen-icon-svg");
+
+    const params = new URLSearchParams(window.location.search);
+    const isCompanion = Boolean(window.opener) || params.get("companion") === "1";
+
+    if (floatBtn) {
+      if (isCompanion) {
+        floatBtn.title = "Toggle Compact / Expanded Window Size";
+        floatBtn.setAttribute("aria-label", "Toggle compact or expanded window size");
+      }
+      floatBtn.addEventListener("click", () => {
+        const hasExtWin = typeof chrome !== "undefined" && chrome.windows && typeof chrome.windows.create === "function";
+        if (hasExtWin && !isCompanion) {
+          const rel = `${window.location.pathname.replace(/^\//, "") || "index.html"}?companion=1`;
+          chrome.windows.create({
+            url: chrome.runtime ? chrome.runtime.getURL(rel) : window.location.href,
+            type: "popup",
+            width: 580,
+            height: 860,
+            focused: true,
+          });
+          return;
+        }
+        if (isCompanion) {
+          // Inside a resizable companion window: toggle between compact companion and wide desktop
+          const isCompact = window.outerWidth < 900;
+          const targetW = isCompact ? Math.min(1440, window.screen.availWidth - 40) : 580;
+          const targetH = isCompact ? Math.min(920, window.screen.availHeight - 40) : 860;
+          try { window.resizeTo(targetW, targetH); } catch (_) {}
+          return;
+        }
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set("companion", "1");
+        window.open(
+          nextUrl.toString(),
+          "F1PitWallCompanion",
+          "popup=yes,width=580,height=860,left=48,top=48,resizable=yes,scrollbars=yes"
+        );
+      });
+    }
+
+    const syncFsIcon = () => {
+      if (!fsSvg || !fsBtn) return;
+      const active = Boolean(document.fullscreenElement);
+      fsBtn.title = active ? "Exit Full Screen" : "Enter Full Screen";
+      fsBtn.setAttribute("aria-label", active ? "Exit full screen" : "Enter full screen");
+      fsSvg.innerHTML = active
+        ? `<polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line>`
+        : `<polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line>`;
+    };
+
+    if (fsBtn) {
+      fsBtn.addEventListener("click", async () => {
+        try {
+          if (document.fullscreenElement) {
+            await document.exitFullscreen();
+          } else {
+            await document.documentElement.requestFullscreen();
+          }
+        } catch (_) {
+          // Fallback inside extension popup windows if fullscreen API is restricted
+          if (typeof chrome !== "undefined" && chrome.windows && chrome.windows.getCurrent) {
+            chrome.windows.getCurrent((win) => {
+              if (!win || !win.id) return;
+              const nextState = win.state === "maximized" || win.state === "fullscreen" ? "normal" : "maximized";
+              chrome.windows.update(win.id, { state: nextState });
+            });
+          }
+        }
+        syncFsIcon();
+      });
+      document.addEventListener("fullscreenchange", syncFsIcon);
+    }
+  }
+
   /* ========================================================================
      PAGE 1: STANDINGS & SCHEDULE (`index.html`)
      ======================================================================== */
   async function initStandingsPage() {
-    // WDC / WCC sub-tabs
     document.querySelectorAll("[data-standings-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.standingsTab;
@@ -265,13 +357,13 @@
 
       box.innerHTML = items.length
         ? items.map((c) => {
-            const turns = Array.isArray(c.corners) ? c.corners.length : 0;
+            const turns = Array.isArray(c.corners) && c.corners.length ? ` · ${c.corners.length}T` : "";
             const svg = window.buildCircuitThumbnailSvg ? window.buildCircuitThumbnailSvg(c) : "";
             return `
               <a href="live.html?circuit=${encodeURIComponent(c.slug)}" class="circuit-item">
                 <div class="circuit-item-info">
                   <span class="circuit-item-name">${esc(c.short_name || c.slug)}</span>
-                  <span class="circuit-item-meta">${esc(c.meeting_name || c.country_name || "")} · ${turns}T</span>
+                  <span class="circuit-item-meta">${esc(c.meeting_name || c.country_name || "")}${turns}</span>
                 </div>
                 <div class="circuit-item-svg">${svg}</div>
               </a>`;
@@ -279,37 +371,54 @@
         : `<div class="empty-state">No matching circuit found.</div>`;
     };
 
-    const loadPastRaces = async (year) => {
+    const loadSeasonRaces = async (year) => {
       const box = $("past-races-list");
-      box.innerHTML = `<div class="empty-state">Loading ${year} race sessions...</div>`;
+      box.innerHTML = `<div class="empty-state">Loading ${year} calendar...</div>`;
       try {
         const r = await fetch(`${state.apiBase}/api/sessions?year=${year}`);
         if (!r.ok) throw new Error("fetch failed");
         const data = await r.json();
         const sessions = (data.sessions || []).slice().reverse();
         if (!sessions.length) {
-          box.innerHTML = `<div class="empty-state">No completed race sessions found for ${year}.</div>`;
+          box.innerHTML = `<div class="empty-state">No race sessions found for ${year}.</div>`;
           return;
         }
-        box.innerHTML = sessions.map((s) => `
-          <a href="live.html?session_key=${encodeURIComponent(s.session_key)}&year=${year}" class="race-launch-row">
-            <div class="race-launch-left">
-              <span class="race-round-badge">R${String(s.round || "?").padStart(2, "0")}</span>
-              <div class="drv-text">
-                <span class="race-launch-name">${esc(s.grand_prix)}</span>
-                <span class="race-launch-meta">${esc(s.circuit_name || "")}</span>
+        box.innerHTML = sessions.map((s) => {
+          const isCompleted = s.completed !== false;
+          const rLabel = `R${String(s.round || "?").padStart(2, "0")}`;
+          if (!isCompleted) {
+            return `
+              <div class="race-launch-row is-upcoming" aria-disabled="true">
+                <div class="race-launch-left">
+                  <span class="race-round-badge">${rLabel}</span>
+                  <div class="drv-text">
+                    <span class="race-launch-name">${esc(s.grand_prix)}</span>
+                    <span class="race-launch-meta">${esc(s.circuit_name || "")}</span>
+                  </div>
+                </div>
+                <span class="race-upcoming-badge">NOT COMPLETED</span>
+              </div>`;
+          }
+          return `
+            <a href="live.html?view=results&year=${year}&round=${encodeURIComponent(s.round)}&session_key=${encodeURIComponent(s.session_key)}" class="race-launch-row">
+              <div class="race-launch-left">
+                <span class="race-round-badge">${rLabel}</span>
+                <div class="drv-text">
+                  <span class="race-launch-name">${esc(s.grand_prix)}</span>
+                  <span class="race-launch-meta">${esc(s.circuit_name || "")}</span>
+                </div>
               </div>
-            </div>
-            <span class="race-launch-cta">Watch Replay &amp; Results</span>
-          </a>`).join("");
+              <span class="race-launch-cta">Final Standings</span>
+            </a>`;
+        }).join("");
       } catch (_) {
-        box.innerHTML = `<div class="empty-state">Connect to backend server to list ${year} replays.</div>`;
+        box.innerHTML = `<div class="empty-state">Connect to backend server to load ${year} calendar.</div>`;
       }
     };
 
     const loadAll = async () => {
       renderCircuits($("circuit-search").value);
-      loadPastRaces($("season-replay-year").value);
+      loadSeasonRaces($("season-replay-year").value);
 
       try {
         const r = await fetch(`${state.apiBase}/api/standings`);
@@ -389,19 +498,23 @@
     };
 
     $("circuit-search").addEventListener("input", (e) => renderCircuits(e.target.value));
-    $("season-replay-year").addEventListener("change", (e) => loadPastRaces(e.target.value));
+    $("season-replay-year").addEventListener("change", (e) => loadSeasonRaces(e.target.value));
     bindSettingsPopover(loadAll);
     loadAll();
   }
 
   /* ========================================================================
-     PAGE 2: LIVE & PAST-RACE REPLAY PIT-WALL (`live.html`)
+     PAGE 2: LIVE RACE MOVEMENT & FINAL RACE RESULTS (`live.html`)
      ======================================================================== */
   function initLivePage() {
     const trackRenderer = new window.TrackCanvasRenderer($("track-canvas"), { compact: false });
     const telemetryRenderer = new window.TelemetryChartRenderer($("telemetry-canvas"));
 
-    // Timing vs Race Results sub-tabs
+    // Keyed DOM map for ZERO-FLICKER hover on live timing rows
+    const timingRowMap = new Map();
+    const resultsRowMap = new Map();
+    let lastRulerKey = "";
+
     document.querySelectorAll("[data-timing-tab]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.timingTab;
@@ -485,7 +598,7 @@
     const renderEventCards = (container, events) => {
       if (!container) return;
       if (!events.length) {
-        container.innerHTML = `<div class="empty-state">No messages yet for this session.</div>`;
+        container.innerHTML = `<div class="empty-state">No messages recorded for this session.</div>`;
         return;
       }
       const barHeights = [6, 12, 15, 9, 14, 16, 10, 7, 13, 15, 11, 8, 14, 10, 6];
@@ -533,9 +646,28 @@
       });
     };
 
-    const renderComms = () => {
-      const race = (state.latestPacket && (state.latestPacket.race || state.latestPacket.tick)) || {};
-      const fia = (race.race_control || []).map((m) => ({
+    let lastCommsSig = "";
+    const renderComms = (force) => {
+      const source = state.viewMode === "live"
+        ? ((state.latestLivePacket && (state.latestLivePacket.race || state.latestLivePacket.tick)) || {})
+        : (state.latestResultsData || {});
+
+      const fiaRaw = source.race_control || [];
+      const radioRaw = source.team_radio || [];
+      const sig = JSON.stringify([
+        state.viewMode,
+        fiaRaw.length,
+        radioRaw.length,
+        state.currentlyPlayingUrl,
+        state.transcripts.size,
+        state.transcribingUrls.size,
+        state.drawerFilter,
+        !$("comms-drawer").classList.contains("hidden"),
+      ]);
+      if (!force && sig === lastCommsSig) return;
+      lastCommsSig = sig;
+
+      const fia = fiaRaw.map((m) => ({
         kind: "fia",
         date: m.date || "",
         lap: m.lap_number,
@@ -544,7 +676,7 @@
         message: m.message || "",
       })).sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
-      const radio = (race.team_radio || []).map((r) => ({
+      const radio = radioRaw.map((r) => ({
         kind: "radio",
         date: r.date || "",
         driver_number: r.driver_number,
@@ -567,9 +699,438 @@
       }
     };
 
-    const applyPacket = (pkt) => {
-      if (!pkt || pkt.type === "post_quali_prediction") return;
-      state.latestPacket = pkt;
+    const setSectorBests = (sb) => {
+      const data = sb || {};
+      $("fastest-lap-val").textContent = data.fastest_lap
+        ? `${data.fastest_lap.formatted || "--"} · ${data.fastest_lap.driver_code}${data.fastest_lap.lap_number ? ` (L${data.fastest_lap.lap_number})` : ""}`
+        : "--:--.---";
+      const setSec = (prefix, rec) => {
+        $(`${prefix}-time`).textContent = rec && rec.formatted ? `${rec.formatted}s` : "--.---s";
+        $(`${prefix}-who`).textContent = rec ? `${rec.driver_code}${rec.team_name ? ` · ${rec.team_name}` : ""}` : "--";
+      };
+      setSec("s1-best", data.fastest_s1);
+      setSec("s2-best", data.fastest_s2);
+      setSec("s3-best", data.fastest_s3);
+    };
+
+    const setRuler = (lapTot) => {
+      const total = Math.max(10, Number(lapTot) || 50);
+      const rKey = String(total);
+      if (rKey === lastRulerKey) return;
+      lastRulerKey = rKey;
+      const ticks = [];
+      for (let l = 10; l <= total; l += 10) {
+        const pct = ((l / total) * 92 + 3.5).toFixed(1);
+        ticks.push(`<span class="stint-ruler-tick" style="left:${pct}%">${l}</span>`);
+      }
+      $("stint-ruler").innerHTML = ticks.join("");
+    };
+
+    /**
+     * Keyed DOM reconciliation for the timing & tyre stint list.
+     * Reuses existing row DOM nodes by driver_number so hovering NEVER flickers
+     * even during 4 Hz live race telemetry updates.
+     */
+    const renderDriversStable = (drivers, lapCur, lapTot, isLiveMode) => {
+      const tList = $("timing-list");
+      const rList = $("results-list");
+      setRuler(lapTot);
+
+      if (!drivers.length) {
+        timingRowMap.clear();
+        resultsRowMap.clear();
+        tList.innerHTML = `<div class="empty-state">${isLiveMode ? "Waiting for live timing data from F1 SignalR feed..." : "Select a completed Grand Prix above to view final standings."}</div>`;
+        rList.innerHTML = `<div class="empty-state">No classification data loaded yet.</div>`;
+        return;
+      }
+
+      // Clear empty-state placeholder if switching from empty -> populated
+      if (tList.querySelector(".empty-state")) tList.innerHTML = "";
+      if (rList.querySelector(".empty-state")) rList.innerHTML = "";
+
+      const activeKeys = new Set();
+
+      drivers.forEach((d, idx) => {
+        const dn = Number(d.driver_number || idx + 1);
+        activeKeys.add(dn);
+        const col = hexCol(d.team_colour, d.team_name);
+        const gap = fmtGap(d);
+        const secs = d.sectors || {};
+        const selA = isLiveMode && dn === state.selectedDriverA;
+        const selB = isLiveMode && dn === state.selectedDriverB;
+
+        // ---- 1. Stable Timing + Tyre Stints Row ----
+        let row = timingRowMap.get(dn);
+        if (!row) {
+          row = document.createElement("button");
+          row.type = "button";
+          row.className = "timing-row";
+          row.setAttribute("role", "listitem");
+          row.dataset.dn = String(dn);
+          row.innerHTML = `
+            <span class="t-pos"></span>
+            <span class="t-drv">
+              <span class="t-stripe"></span>
+              <span class="t-code"></span>
+            </span>
+            <span class="t-gap"></span>
+            <span class="t-sectors">
+              <span class="sec-pip" data-s="1"></span>
+              <span class="sec-pip" data-s="2"></span>
+              <span class="sec-pip" data-s="3"></span>
+            </span>
+            <span class="stint-svg-cell"></span>`;
+          row.addEventListener("click", () => {
+            if (state.viewMode !== "live") return;
+            const clickedDn = Number(row.dataset.dn);
+            if (clickedDn === state.selectedDriverA) return;
+            state.selectedDriverB = state.selectedDriverA;
+            state.selectedDriverA = clickedDn;
+            if (state.latestLivePacket) applyLivePacket(state.latestLivePacket);
+          });
+          timingRowMap.set(dn, row);
+        }
+
+        const posText = d.retired ? "OUT" : String(d.position || idx + 1).padStart(2, "0");
+        const posEl = row.querySelector(".t-pos");
+        if (posEl.textContent !== posText) posEl.textContent = posText;
+        posEl.classList.toggle("out", Boolean(d.retired));
+
+        const stripeEl = row.querySelector(".t-stripe");
+        if (stripeEl.dataset.col !== col) {
+          stripeEl.style.background = col;
+          stripeEl.dataset.col = col;
+        }
+        const codeEl = row.querySelector(".t-code");
+        const codeTxt = String(d.code || dn);
+        if (codeEl.textContent !== codeTxt) codeEl.textContent = codeTxt;
+
+        const gapEl = row.querySelector(".t-gap");
+        const compactGap = d.position === 1 && !isLiveMode ? "WINNER" : gap.text;
+        if (gapEl.textContent !== compactGap) gapEl.textContent = compactGap;
+        const gapCls = `t-gap ${gap.cls}`.trim();
+        if (gapEl.className !== gapCls) gapEl.className = gapCls;
+
+        const p1 = row.querySelector('[data-s="1"]');
+        const p2 = row.querySelector('[data-s="2"]');
+        const p3 = row.querySelector('[data-s="3"]');
+        const c1 = `sec-pip ${secs.s1_status || "NONE"}`;
+        const c2 = `sec-pip ${secs.s2_status || "NONE"}`;
+        const c3 = `sec-pip ${secs.s3_status || "NONE"}`;
+        if (p1.className !== c1) p1.className = c1;
+        if (p2.className !== c2) p2.className = c2;
+        if (p3.className !== c3) p3.className = c3;
+
+        row.classList.toggle("selected-a", selA);
+        row.classList.toggle("selected-b", selB);
+        row.classList.toggle("is-retired", Boolean(d.retired));
+        row.title = isLiveMode ? `Compare live telemetry: ${d.full_name || codeTxt}` : `${d.full_name || codeTxt} · ${d.team_name || ""}`;
+
+        // Only rebuild stint SVG when stints/lap/age actually change
+        const stintSig = JSON.stringify([
+          lapCur,
+          lapTot,
+          d.laps_completed,
+          Boolean(d.retired),
+          d.tyre && d.tyre.compound,
+          d.tyre && d.tyre.age_laps,
+          (d.stints || []).map((s) => [s.compound, s.lap_start, s.lap_end]),
+        ]);
+        if (row.dataset.stintSig !== stintSig) {
+          row.querySelector(".stint-svg-cell").innerHTML = buildStintTimelineSvg(d, lapCur, lapTot);
+          row.dataset.stintSig = stintSig;
+        }
+
+        // Only touch DOM order if position actually changed
+        if (tList.children[idx] !== row) {
+          tList.insertBefore(row, tList.children[idx] || null);
+        }
+
+        // ---- 2. Stable Full Classification Row ----
+        let rRow = resultsRowMap.get(dn);
+        if (!rRow) {
+          rRow = document.createElement("div");
+          rRow.className = "results-row";
+          rRow.innerHTML = `
+            <span class="t-pos"></span>
+            <div class="drv-identity">
+              <span class="team-bar"></span>
+              <div class="drv-text">
+                <div class="drv-name-line">
+                  <span class="drv-code"></span>
+                  <span class="drv-full"></span>
+                </div>
+                <span class="drv-team"></span>
+              </div>
+            </div>
+            <span class="mono-muted align-right r-grid"></span>
+            <span class="align-right r-tyre"></span>
+            <span class="mono-val align-right r-best"></span>
+            <span class="t-gap align-right r-gap"></span>`;
+          resultsRowMap.set(dn, rRow);
+        }
+
+        const rPos = rRow.querySelector(".t-pos");
+        if (rPos.textContent !== posText) rPos.textContent = posText;
+        rPos.classList.toggle("out", Boolean(d.retired));
+
+        const rBar = rRow.querySelector(".team-bar");
+        if (rBar.dataset.col !== col) {
+          rBar.style.background = col;
+          rBar.dataset.col = col;
+        }
+        const rCode = rRow.querySelector(".drv-code");
+        if (rCode.textContent !== codeTxt) rCode.textContent = codeTxt;
+        const rFull = rRow.querySelector(".drv-full");
+        const fullTxt = String(d.full_name || "");
+        if (rFull.textContent !== fullTxt) rFull.textContent = fullTxt;
+        const rTeam = rRow.querySelector(".drv-team");
+        const teamTxt = String(d.team_name || "");
+        if (rTeam.textContent !== teamTxt) rTeam.textContent = teamTxt;
+
+        const gridTxt = d.grid_position ? `P${d.grid_position}` : "--";
+        const rGrid = rRow.querySelector(".r-grid");
+        if (rGrid.textContent !== gridTxt) rGrid.textContent = gridTxt;
+
+        const compKey = String((d.tyre && d.tyre.compound) || "UNKNOWN").toUpperCase();
+        const compMeta = COMPOUND_META[compKey] || COMPOUND_META.UNKNOWN;
+        const tyreAge = d.tyre && d.tyre.age_laps != null ? `${Math.max(1, Math.round(Number(d.tyre.age_laps)))}L` : "";
+        const tyreSig = `${compMeta.letter}:${tyreAge}`;
+        const rTyre = rRow.querySelector(".r-tyre");
+        if (rTyre.dataset.sig !== tyreSig) {
+          rTyre.innerHTML = `<span class="tyre-chip-sm" style="color:${compMeta.color};border-color:${compMeta.color}55">${compMeta.letter}${tyreAge ? ` ${tyreAge}` : ""}</span>`;
+          rTyre.dataset.sig = tyreSig;
+        }
+
+        const bestStr = fmtLap(d.best_lap_time_s || d.last_lap_time_s, d.best_lap_formatted);
+        const rBest = rRow.querySelector(".r-best");
+        if (rBest.textContent !== bestStr) rBest.textContent = bestStr;
+
+        const ptsSuffix = !isLiveMode && d.points > 0 ? ` · ${Math.round(d.points)}P` : "";
+        const gapFinalTxt = `${gap.text}${ptsSuffix}`;
+        const rGap = rRow.querySelector(".r-gap");
+        if (rGap.textContent !== gapFinalTxt) rGap.textContent = gapFinalTxt;
+        const rGapCls = `t-gap align-right r-gap ${gap.cls}`.trim();
+        if (rGap.className !== rGapCls) rGap.className = rGapCls;
+
+        if (rList.children[idx] !== rRow) {
+          rList.insertBefore(rRow, rList.children[idx] || null);
+        }
+      });
+
+      // Prune drivers no longer present (e.g. switching race)
+      for (const [dn, el] of timingRowMap.entries()) {
+        if (!activeKeys.has(dn)) {
+          el.remove();
+          timingRowMap.delete(dn);
+        }
+      }
+      for (const [dn, el] of resultsRowMap.entries()) {
+        if (!activeKeys.has(dn)) {
+          el.remove();
+          resultsRowMap.delete(dn);
+        }
+      }
+    };
+
+    const renderFinalPodiumCards = (data) => {
+      const box = $("race-podium-cards");
+      const drivers = Array.isArray(data.drivers) ? data.drivers.slice(0, 3) : [];
+      $("podium-laps-meta").textContent = data.lap_total ? `${data.lap_total} Laps · Final Classification` : "Final Classification";
+      if (!drivers.length) {
+        box.innerHTML = `<div class="empty-state">${esc(data.message || "Race not completed yet.")}</div>`;
+        return;
+      }
+      box.innerHTML = drivers.map((d, idx) => {
+        const col = hexCol(d.team_colour, d.team_name);
+        const gridDelta = d.grid_position ? `Grid P${d.grid_position}` : "";
+        return `
+          <article class="race-podium-card" style="border-left-color:${col}">
+            <div class="race-podium-left">
+              <span class="race-podium-pos">P${idx + 1}</span>
+              <div class="drv-text">
+                <div class="drv-name-line">
+                  <span class="drv-code">${esc(d.code)}</span>
+                  <span class="drv-full">${esc(d.full_name)}</span>
+                </div>
+                <span class="drv-team">${esc(d.team_name)}${gridDelta ? ` · ${gridDelta}` : ""}</span>
+              </div>
+            </div>
+            <div class="race-podium-right">
+              <span class="race-podium-gap">${esc(d.gap_display || (idx === 0 ? "WINNER" : "--"))}</span>
+              <span class="race-podium-pts">${d.points ? `+${Math.round(d.points)} PTS` : ""}</span>
+            </div>
+          </article>`;
+      }).join("");
+    };
+
+    const resolveLocalCircuit = (nr) => {
+      const cat = window.F1_CIRCUITS_2D || {};
+      const aliases = {
+        losail: "lusail", qatar: "lusail", vegas: "las_vegas", yas_marina: "yas_marina_circuit",
+        abu_dhabi: "yas_marina_circuit", albert_park: "melbourne", villeneuve: "montreal",
+        red_bull_ring: "spielberg", spa: "spa_francorchamps", marina_bay: "singapore",
+        americas: "austin", rodriguez: "mexico_city", monaco: "monte_carlo", bahrain: "sakhir",
+      };
+      for (const raw of [nr && nr.circuit_id, nr && nr.circuit_name, nr && nr.grand_prix]) {
+        if (!raw) continue;
+        const norm = String(raw).toLowerCase().replace(/grand prix|international|circuit/g, "").trim().replace(/[\s-]+/g, "_");
+        if (cat[norm]) return cat[norm];
+        if (aliases[norm] && cat[aliases[norm]]) return cat[aliases[norm]];
+        for (const [k, v] of Object.entries(aliases)) {
+          if (norm.includes(k) && cat[v]) return cat[v];
+        }
+        for (const item of Object.values(cat)) {
+          const hay = `${item.short_name || ""} ${item.meeting_name || ""} ${item.location || ""}`.toLowerCase();
+          if (hay.includes(String(raw).toLowerCase())) return item;
+        }
+      }
+      return null;
+    };
+
+    const renderIdleLiveSchedule = async () => {
+      $("live-idle-panel").classList.remove("hidden");
+      $("timing-main-panel").classList.add("hidden");
+      $("podium-summary-panel").classList.add("hidden");
+      $("live-telemetry-panel").classList.add("hidden");
+      $("comms-section-wrap").classList.add("hidden");
+      $("gps-lock-overlay").classList.add("hidden");
+      $("fastest-lap-banner").classList.add("hidden");
+      $("sector-records-row").classList.add("hidden");
+
+      $("flag-pill").className = "status-pill flag-yellow";
+      $("flag-pill-text").textContent = "NO LIVE RACE";
+      if ($("live-badge-text")) $("live-badge-text").textContent = "SIGNALR FEED STANDBY";
+      $("live-stream-meta").textContent = "Waiting for Next Session";
+      $("comms-count-badge").textContent = "0";
+      setSectorBests(null);
+      trackRenderer.updateDrivers([], false);
+
+      try {
+        if (!state.nextRaceCache) {
+          const r = await fetch(`${state.apiBase}/api/next-race`);
+          if (r.ok) state.nextRaceCache = await r.json();
+        }
+        const nr = state.nextRaceCache;
+        if (nr) {
+          const gpShort = String(nr.grand_prix || "Next Race").replace(/\s*Grand Prix$/i, " GP").toUpperCase();
+          $("session-pill-text").textContent = `NEXT · ${gpShort}`;
+          $("idle-next-race-title").textContent = `Next Race · ${nr.grand_prix || "Grand Prix"}`;
+          $("idle-next-countdown").textContent = (nr.countdown && nr.countdown.label) || `ROUND ${nr.round || "--"}`;
+          $("idle-next-round-meta").textContent = `ROUND ${nr.round || "--"}${nr.date ? ` · ${nr.date}` : ""}`;
+
+          const sess = nr.sessions || [];
+          $("idle-next-race-sessions").innerHTML = sess.length
+            ? sess.map((s) => {
+                const t = s.times || {};
+                const isMain = String(s.name || "").toLowerCase().includes("grand prix");
+                const ist = t.ist ? `${t.ist.day_short || ""} ${t.ist.time_24h || "--"}`.trim() : "--";
+                const uk = t.uk ? t.uk.time_24h || "--" : "--";
+                const usEt = t.us_eastern ? t.us_eastern.time_24h || "--" : "--";
+                const usPt = t.us_pacific ? t.us_pacific.time_24h || "--" : "--";
+                return `
+                  <div class="tz-row ${isMain ? "is-main" : ""}">
+                    <span class="tz-session">${esc(s.name)}</span>
+                    <span class="align-right tz-ist">${esc(ist)}</span>
+                    <span class="align-right tz-uk">${esc(uk)}</span>
+                    <span class="align-right tz-us">${esc(usEt)} / ${esc(usPt)}</span>
+                  </div>`;
+              }).join("")
+            : `<div class="empty-state">No upcoming session times available.</div>`;
+
+          const c2d = resolveLocalCircuit(nr);
+          if (c2d) {
+            trackRenderer.setCircuit(c2d);
+            $("live-circuit-name").textContent = formatCircuitHeading(nr.circuit_name || c2d.short_name);
+            $("live-circuit-meta").textContent = Array.isArray(c2d.corners) && c2d.corners.length
+              ? `Upcoming R${nr.round || "--"} · ${c2d.corners.length}T`
+              : `Upcoming R${nr.round || "--"}`;
+          }
+        }
+      } catch (_) {}
+    };
+
+    const applyFinalResults = (data) => {
+      state.latestResultsData = data;
+      $("live-idle-panel").classList.add("hidden");
+      $("timing-main-panel").classList.remove("hidden");
+      $("podium-summary-panel").classList.remove("hidden");
+      $("live-telemetry-panel").classList.add("hidden");
+      $("comms-section-wrap").classList.remove("hidden");
+      $("fastest-lap-banner").classList.remove("hidden");
+      $("sector-records-row").classList.remove("hidden");
+
+      const completed = data.completed !== false;
+      const shortGp = String(data.grand_prix || "Grand Prix").replace(/\s*Grand Prix$/i, " GP").toUpperCase();
+
+      $("flag-pill").className = completed ? "status-pill flag-chequered" : "status-pill flag-yellow";
+      $("flag-pill-text").textContent = completed ? "FINAL CLASSIFICATION" : "NOT COMPLETED";
+      $("session-pill-text").textContent = completed
+        ? `${shortGp} · ${data.lap_total || "--"} LAPS`
+        : `${shortGp} · UPCOMING`;
+      $("race-date-chip").textContent = completed
+        ? `R${data.round || "--"} · ${data.date || data.season} · Final Grid`
+        : `R${data.round || "--"} · Not Completed Yet`;
+
+      if (data.weather) {
+        const air = data.weather.air_temperature_c != null ? `${Number(data.weather.air_temperature_c).toFixed(1)}°C` : "--°C";
+        const trk = data.weather.track_temperature_c != null ? `${Number(data.weather.track_temperature_c).toFixed(1)}°C` : "--°C";
+        $("weather-readout").textContent = `AIR ${air} · TRK ${trk}`;
+      } else {
+        $("weather-readout").textContent = `${data.season || 2026} · ROUND ${data.round || "--"}`;
+      }
+
+      if (data.circuit) {
+        const resolved = (data.circuit.track_outline && data.circuit.track_outline.length >= 10)
+          ? data.circuit
+          : (data.circuit.slug && window.F1_CIRCUITS_2D && window.F1_CIRCUITS_2D[data.circuit.slug]);
+        if (resolved) {
+          trackRenderer.setCircuit(resolved);
+          $("live-circuit-name").textContent = formatCircuitHeading(data.circuit.name || resolved.short_name);
+          $("live-circuit-meta").textContent = Array.isArray(resolved.corners) && resolved.corners.length
+            ? `${resolved.corners.length}T`
+            : "";
+        }
+      }
+
+      // Past race results: show clean static 2D circuit map (no moving dots, no lock overlay)
+      $("gps-lock-overlay").classList.add("hidden");
+      trackRenderer.updateDrivers([], false);
+
+      setSectorBests(data.session_best);
+      renderDriversStable(data.drivers || [], data.lap_total || 50, data.lap_total || 50, false);
+      renderFinalPodiumCards(data);
+
+      // Queue Whisper transcription for recent radio clips
+      const clips = (data.team_radio || []).slice(-6);
+      for (const clip of clips) {
+        const u = clip.recording_url;
+        if (!u) continue;
+        if (clip.transcript) state.transcripts.set(u, clip.transcript);
+        else if (!state.transcripts.has(u) && !state.transcribingUrls.has(u)) requestWhisper(u);
+      }
+      renderComms(true);
+    };
+
+    const applyLivePacket = (pkt) => {
+      if (!pkt || pkt.type === "post_quali_prediction" || state.viewMode !== "live") return;
+      state.latestLivePacket = pkt;
+
+      // When no live F1 session is actively running on track, show Next Race Schedule + Circuit
+      if (pkt.session_active === false) {
+        renderIdleLiveSchedule();
+        return;
+      }
+
+      $("live-idle-panel").classList.add("hidden");
+      $("timing-main-panel").classList.remove("hidden");
+      $("podium-summary-panel").classList.add("hidden");
+      $("live-telemetry-panel").classList.remove("hidden");
+      $("comms-section-wrap").classList.remove("hidden");
+      $("fastest-lap-banner").classList.remove("hidden");
+      $("sector-records-row").classList.remove("hidden");
+      if ($("live-badge-text")) $("live-badge-text").textContent = "LIVE TRACK MOVEMENT · 60 FPS";
+
       const race = pkt.race || pkt.tick || {};
       const drivers = Array.isArray(race.drivers) ? race.drivers : [];
       const lapCur = race.lap_current != null ? race.lap_current : 0;
@@ -581,6 +1142,7 @@
       $("flag-pill-text").textContent = status === "SC" ? "SAFETY CAR" : status === "VSC" ? "VIRTUAL SC" : `${status} FLAG`;
       const shortGp = String(pkt.grand_prix || "Live Session").replace(/\s*Grand Prix$/i, " GP").toUpperCase();
       $("session-pill-text").textContent = `${shortGp} · L${lapCur}/${lapTot}`;
+      $("live-stream-meta").textContent = caps.gps_available ? "Live GPS + Timing Active" : "Live Timing Active (GPS Locked)";
 
       if (race.weather) {
         const air = race.weather.air_temperature_c != null ? `${Number(race.weather.air_temperature_c).toFixed(1)}°C` : "--°C";
@@ -594,26 +1156,17 @@
           : (pkt.circuit.slug && window.F1_CIRCUITS_2D && window.F1_CIRCUITS_2D[pkt.circuit.slug]);
         if (resolved) {
           trackRenderer.setCircuit(resolved);
-          const rawName = String(pkt.circuit.name || resolved.short_name || "Circuit").trim();
-          $("live-circuit-name").textContent = /circuit$/i.test(rawName) ? rawName : `${rawName} Circuit`;
-          $("live-circuit-meta").textContent = Array.isArray(resolved.corners) ? `${resolved.corners.length}T` : "";
+          $("live-circuit-name").textContent = formatCircuitHeading(pkt.circuit.name || resolved.short_name);
+          $("live-circuit-meta").textContent = Array.isArray(resolved.corners) && resolved.corners.length
+            ? `${resolved.corners.length}T`
+            : "";
         }
       }
 
       $("gps-lock-overlay").classList.toggle("hidden", Boolean(caps.gps_available));
       $("telem-lock-overlay").classList.toggle("hidden", Boolean(caps.telemetry_available));
 
-      const sb = race.session_best || {};
-      $("fastest-lap-val").textContent = sb.fastest_lap
-        ? `${sb.fastest_lap.formatted || "--"} · ${sb.fastest_lap.driver_code}${sb.fastest_lap.lap_number ? ` (L${sb.fastest_lap.lap_number})` : ""}`
-        : "--:--.---";
-      const setSec = (prefix, rec) => {
-        $(`${prefix}-time`).textContent = rec && rec.formatted ? `${rec.formatted}s` : "--.---s";
-        $(`${prefix}-who`).textContent = rec ? `${rec.driver_code}${rec.team_name ? ` · ${rec.team_name}` : ""}` : "--";
-      };
-      setSec("s1-best", sb.fastest_s1);
-      setSec("s2-best", sb.fastest_s2);
-      setSec("s3-best", sb.fastest_s3);
+      setSectorBests(race.session_best);
 
       if (drivers.length >= 2) {
         const nums = new Set(drivers.map((d) => Number(d.driver_number)));
@@ -624,84 +1177,9 @@
         }
       }
 
-      // Ruler
-      const total = Math.max(10, Number(lapTot) || 50);
-      const ticks = [];
-      for (let l = 10; l <= total; l += 10) {
-        const pct = ((l / total) * 92 + 3.5).toFixed(1);
-        ticks.push(`<span class="stint-ruler-tick" style="left:${pct}%">${l}</span>`);
-      }
-      $("stint-ruler").innerHTML = ticks.join("");
+      renderDriversStable(drivers, lapCur, lapTot, true);
 
-      // 22-Driver Timing & Tyre Stints
-      const tList = $("timing-list");
-      const rList = $("results-list");
-      if (!drivers.length) {
-        tList.innerHTML = `<div class="empty-state">Select a completed race above or switch to Live Race Feed.</div>`;
-        rList.innerHTML = `<div class="empty-state">No race classification loaded yet.</div>`;
-      } else {
-        tList.innerHTML = drivers.map((d) => {
-          const dn = Number(d.driver_number);
-          const col = hexCol(d.team_colour, d.team_name);
-          const gap = fmtGap(d);
-          const secs = d.sectors || {};
-          const selCls = dn === state.selectedDriverA ? "selected-a" : dn === state.selectedDriverB ? "selected-b" : "";
-          const stintSvg = buildStintTimelineSvg(d, lapCur, lapTot);
-          return `
-            <button type="button" class="timing-row ${selCls} ${d.retired ? "is-retired" : ""}" data-dn="${dn}" role="listitem" title="Compare telemetry: ${esc(d.full_name)}">
-              <span class="t-pos ${d.retired ? "out" : ""}">${d.retired ? "OUT" : String(d.position || "--").padStart(2, "0")}</span>
-              <span class="t-drv">
-                <span class="t-stripe" style="background:${col}"></span>
-                <span class="t-code">${esc(d.code)}</span>
-              </span>
-              <span class="t-gap ${gap.cls}">${esc(gap.text)}</span>
-              <span class="t-sectors">
-                <span class="sec-pip ${esc(secs.s1_status || "NONE")}"></span>
-                <span class="sec-pip ${esc(secs.s2_status || "NONE")}"></span>
-                <span class="sec-pip ${esc(secs.s3_status || "NONE")}"></span>
-              </span>
-              <span class="stint-svg-cell">${stintSvg}</span>
-            </button>`;
-        }).join("");
-
-        tList.querySelectorAll(".timing-row").forEach((row) => {
-          row.addEventListener("click", () => {
-            const dn = Number(row.dataset.dn);
-            if (dn === state.selectedDriverA) return;
-            state.selectedDriverB = state.selectedDriverA;
-            state.selectedDriverA = dn;
-            applyPacket(state.latestPacket);
-          });
-        });
-
-        // Race Results / Classification Tab
-        rList.innerHTML = drivers.map((d, i) => {
-          const col = hexCol(d.team_colour, d.team_name);
-          const gap = fmtGap(d);
-          const bestStr = fmtLap(d.best_lap_time_s || d.last_lap_time_s);
-          const compKey = String((d.tyre && d.tyre.compound) || "UNKNOWN").toUpperCase();
-          const compMeta = COMPOUND_META[compKey] || COMPOUND_META.UNKNOWN;
-          const tyreAge = d.tyre && d.tyre.age_laps != null ? `${Math.max(1, Math.round(Number(d.tyre.age_laps)))}L` : "";
-          return `
-            <div class="results-row">
-              <span class="t-pos ${d.retired ? "out" : ""}">${d.retired ? "OUT" : String(d.position || i + 1).padStart(2, "0")}</span>
-              <div class="drv-identity">
-                <span class="team-bar" style="background:${col}"></span>
-                <div class="drv-text">
-                  <div class="drv-name-line">
-                    <span class="drv-code">${esc(d.code)}</span>
-                    <span class="drv-full">${esc(d.full_name)}</span>
-                  </div>
-                  <span class="drv-team">${esc(d.team_name)}</span>
-                </div>
-              </div>
-              <span class="align-right"><span class="tyre-chip-sm" style="color:${compMeta.color};border-color:${compMeta.color}55">${compMeta.letter}${tyreAge ? ` ${tyreAge}` : ""}</span></span>
-              <span class="mono-val align-right">${bestStr}</span>
-              <span class="t-gap align-right ${gap.cls}">${esc(gap.text)}</span>
-            </div>`;
-        }).join("");
-      }
-
+      // Live 60 FPS car movement on 2D circuit map
       trackRenderer.setSelectedDrivers([state.selectedDriverA, state.selectedDriverB]);
       trackRenderer.updateDrivers(drivers, caps.gps_available);
 
@@ -726,30 +1204,12 @@
       );
       telemetryRenderer.pushSample(drvA && drvA.telemetry, drvB && drvB.telemetry, caps.telemetry_available);
 
-      const isReplay = pkt.type === "replay_frame";
-      state.mode = pkt.mode || (isReplay ? "replay" : "free_live");
-      document.querySelectorAll(".seg-opt[data-mode]").forEach((b) => {
-        b.classList.toggle("active", b.dataset.mode === state.mode);
-      });
-      $("replay-controls").classList.toggle("hidden", !isReplay);
-      if (isReplay && pkt.replay) {
-        $("btn-play-pause").textContent = pkt.replay.paused ? "Play" : "Pause";
-        document.querySelectorAll(".spd-btn").forEach((b) => {
-          b.classList.toggle("active", Number(b.dataset.speed) === Number(pkt.replay.speed));
-        });
-        const seekEl = $("seek-lap-input");
-        seekEl.max = String(lapTot);
-        if (document.activeElement !== seekEl) seekEl.value = String(Math.max(1, lapCur));
-        $("seek-lap-readout").textContent = `${lapCur}/${lapTot}`;
-      }
-
-      // Whisper transcripts & autoplay
       const clips = race.team_radio || [];
       for (const clip of clips) {
         const u = clip.recording_url;
         if (!u) continue;
         if (clip.transcript) state.transcripts.set(u, clip.transcript);
-        else if (!state.transcripts.has(u) && !state.transcribingUrls.has(u) && !state.fixtureOverride) requestWhisper(u);
+        else if (!state.transcripts.has(u) && !state.transcribingUrls.has(u)) requestWhisper(u);
       }
       if ($("radio-autoplay-check").checked && clips.length) {
         const newest = clips[clips.length - 1];
@@ -758,128 +1218,195 @@
           playRadioClip(newest.recording_url);
         }
       }
-      renderComms();
+      renderComms(false);
     };
 
-    const loadSessionsForYear = async (year, autoSelectKey) => {
-      const sel = $("session-select");
-      try {
-        const r = await fetch(`${state.apiBase}/api/sessions?year=${year}`);
-        if (!r.ok) return;
-        const d = await r.json();
-        const sessions = d.sessions || [];
-        sel.innerHTML = sessions.length
-          ? sessions.map((s) => `<option value="${s.session_key}">R${s.round || "?"} · ${esc(s.grand_prix)}</option>`).join("")
-          : `<option value="">No races found</option>`;
-        if (autoSelectKey) sel.value = String(autoSelectKey);
-        else if (sessions.length) sel.value = String(sessions[sessions.length - 1].session_key);
-      } catch (_) {}
-    };
-
-    const loadReplay = async (sessionKey) => {
-      if (!sessionKey) return;
-      $("btn-load-session").textContent = "Loading...";
-      try {
-        await fetch(`${state.apiBase}/api/replay/load`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_key: Number(sessionKey), include_telemetry: true, autoplay: true }),
-        });
-      } finally {
-        $("btn-load-session").textContent = "Load Race";
+    const disconnectWs = () => {
+      clearTimeout(state.wsReconnectTimer);
+      if (state.ws) {
+        try { state.ws.onclose = null; state.ws.close(); } catch (_) {}
+        state.ws = null;
       }
+      $("ws-conn-status").textContent = "Standby (Past Race Results)";
     };
 
-    const sendControl = async (payload) => {
-      try {
-        await fetch(`${state.apiBase}/api/replay/control`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch (_) {}
-    };
-
-    const switchMode = async (mode) => {
-      state.mode = mode;
-      document.querySelectorAll(".seg-opt[data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-      try {
-        await fetch(`${state.apiBase}/api/mode`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode }),
-        });
-      } catch (_) {}
-    };
-
-    const connectWs = () => {
-      if (state.ws) { try { state.ws.close(); } catch (_) {} }
+    const connectLiveWs = () => {
+      disconnectWs();
       const url = toWsUrl(state.apiBase);
       $("ws-conn-status").textContent = `Connecting to ${url}...`;
+      $("live-stream-meta").textContent = "Connecting to Live Feed...";
       const ws = new WebSocket(url);
       state.ws = ws;
-      ws.onopen = () => { $("ws-conn-status").textContent = `Connected · ${state.apiBase}`; };
+      ws.onopen = () => {
+        $("ws-conn-status").textContent = `Live Connected · ${state.apiBase}`;
+        $("live-stream-meta").textContent = "Live Stream Connected";
+      };
       ws.onmessage = (evt) => {
-        if (state.fixtureOverride) return;
+        if (state.viewMode !== "live") return;
         let pkt;
         try { pkt = JSON.parse(evt.data); } catch (_) { return; }
         if (!pkt || pkt.type === "pong") return;
-        if (state.syncDelayS <= 0) applyPacket(pkt);
+        if (state.syncDelayS <= 0) applyLivePacket(pkt);
         else {
           state.delayBuffer.push({ at: Date.now() + state.syncDelayS * 1000, pkt });
           if (state.delayBuffer.length > 400) state.delayBuffer.shift();
         }
       };
       ws.onclose = () => {
+        if (state.viewMode !== "live") return;
         $("ws-conn-status").textContent = "Reconnecting...";
+        $("live-stream-meta").textContent = "Reconnecting...";
         clearTimeout(state.wsReconnectTimer);
-        state.wsReconnectTimer = setTimeout(connectWs, 2500);
+        state.wsReconnectTimer = setTimeout(connectLiveWs, 2500);
       };
     };
 
     setInterval(() => {
-      if (state.fixtureOverride || !state.delayBuffer.length) return;
+      if (state.viewMode !== "live" || !state.delayBuffer.length) return;
       const now = Date.now();
       let due = null;
       while (state.delayBuffer.length && state.delayBuffer[0].at <= now) due = state.delayBuffer.shift().pkt;
-      if (due) applyPacket(due);
+      if (due) applyLivePacket(due);
     }, 200);
 
-    document.querySelectorAll(".seg-opt[data-mode]").forEach((b) => b.addEventListener("click", () => switchMode(b.dataset.mode)));
-    $("replay-year-select").addEventListener("change", (e) => loadSessionsForYear(e.target.value));
-    $("btn-load-session").addEventListener("click", () => loadReplay($("session-select").value));
-    $("btn-play-pause").addEventListener("click", () => {
-      const paused = state.latestPacket && state.latestPacket.replay && state.latestPacket.replay.paused;
-      sendControl({ action: paused ? "play" : "pause" });
+    const loadSessionsForYear = async (year, targetRound, targetSk) => {
+      const sel = $("session-select");
+      try {
+        const r = await fetch(`${state.apiBase}/api/sessions?year=${year}`);
+        if (!r.ok) return [];
+        const d = await r.json();
+        const sessions = d.sessions || [];
+        state.sessionsCache = sessions;
+        sel.innerHTML = sessions.length
+          ? sessions.map((s) => {
+              const done = s.completed !== false;
+              const label = `R${s.round || "?"} · ${s.grand_prix}${done ? "" : " (Not Completed)"}`;
+              return `<option value="${s.round}" data-sk="${s.session_key || ""}" ${done ? "" : "disabled"}>${esc(label)}</option>`;
+            }).join("")
+          : `<option value="">No races found</option>`;
+
+        const completed = sessions.filter((s) => s.completed !== false);
+        let chosen = null;
+        if (targetRound) {
+          chosen = completed.find((s) => String(s.round) === String(targetRound));
+        }
+        if (!chosen && targetSk) {
+          chosen = completed.find((s) => String(s.session_key) === String(targetSk));
+        }
+        if (!chosen && completed.length) {
+          chosen = completed[completed.length - 1];
+        }
+        if (chosen) sel.value = String(chosen.round);
+        return sessions;
+      } catch (_) {
+        return [];
+      }
+    };
+
+    const loadFinalResults = async () => {
+      const year = Number($("results-year-select").value) || 2026;
+      const sel = $("session-select");
+      const round = Number(sel.value) || undefined;
+      const opt = sel.options[sel.selectedIndex];
+      const sk = opt && opt.dataset.sk ? Number(opt.dataset.sk) : undefined;
+      if (!round) return;
+
+      $("btn-load-session").textContent = "Loading...";
+      try {
+        const qs = new URLSearchParams({ season: String(year), round: String(round) });
+        if (sk) qs.set("session_key", String(sk));
+        const r = await fetch(`${state.apiBase}/api/race-results?${qs.toString()}`);
+        if (r.ok) {
+          const data = await r.json();
+          applyFinalResults(data);
+        }
+      } finally {
+        $("btn-load-session").textContent = "Load Results";
+      }
+    };
+
+    const setViewMode = async (mode) => {
+      state.viewMode = mode === "live" ? "live" : "results";
+      const isLive = state.viewMode === "live";
+
+      document.querySelectorAll(".seg-opt[data-view]").forEach((b) => {
+        b.classList.toggle("active", b.dataset.view === state.viewMode);
+      });
+      $("results-selector-group").classList.toggle("hidden", isLive);
+      $("results-meta-strip").classList.toggle("hidden", isLive);
+      $("live-status-strip").classList.toggle("hidden", !isLive);
+      $("podium-summary-panel").classList.toggle("hidden", isLive);
+      $("live-telemetry-panel").classList.toggle("hidden", !isLive);
+
+      if (isLive) {
+        renderIdleLiveSchedule();
+        try {
+          await fetch(`${state.apiBase}/api/mode`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "free_live" }),
+          });
+        } catch (_) {}
+        connectLiveWs();
+      } else {
+        disconnectWs();
+        $("live-idle-panel").classList.add("hidden");
+        $("timing-main-panel").classList.remove("hidden");
+        $("podium-summary-panel").classList.remove("hidden");
+        $("live-telemetry-panel").classList.add("hidden");
+        $("comms-section-wrap").classList.remove("hidden");
+        if (state.latestResultsData) {
+          applyFinalResults(state.latestResultsData);
+        } else {
+          await loadFinalResults();
+        }
+      }
+    };
+
+    if ($("btn-switch-to-results")) {
+      $("btn-switch-to-results").addEventListener("click", () => setViewMode("results"));
+    }
+
+    document.querySelectorAll(".seg-opt[data-view]").forEach((b) => {
+      b.addEventListener("click", () => setViewMode(b.dataset.view));
     });
-    document.querySelectorAll(".spd-btn").forEach((b) => b.addEventListener("click", () => sendControl({ action: "set_speed", speed: Number(b.dataset.speed) })));
-    $("seek-lap-input").addEventListener("change", (e) => sendControl({ action: "seek_lap", lap: Number(e.target.value) }));
+    $("results-year-select").addEventListener("change", (e) => {
+      loadSessionsForYear(e.target.value).then(() => loadFinalResults());
+    });
+    $("session-select").addEventListener("change", () => loadFinalResults());
+    $("btn-load-session").addEventListener("click", () => loadFinalResults());
 
-    bindSettingsPopover(() => { connectWs(); loadSessionsForYear($("replay-year-select").value); });
+    bindSettingsPopover(() => {
+      if (state.viewMode === "live") connectLiveWs();
+      else loadSessionsForYear($("results-year-select").value).then(() => loadFinalResults());
+    });
 
-    // Check URL query params (?session_key=... or ?circuit=... from Standings page)
+    // Parse query params (?view=live|results, ?year=..., ?round=..., ?session_key=..., ?circuit=...)
     const params = new URLSearchParams(window.location.search);
+    const qView = params.get("view") === "live" ? "live" : "results";
     const qYear = params.get("year") || "2026";
+    const qRound = params.get("round");
     const qSession = params.get("session_key");
     const qCircuit = params.get("circuit");
-    $("replay-year-select").value = qYear;
+    $("results-year-select").value = qYear;
+
     if (qCircuit && window.F1_CIRCUITS_2D && window.F1_CIRCUITS_2D[qCircuit]) {
       const c = window.F1_CIRCUITS_2D[qCircuit];
       trackRenderer.setCircuit(c);
-      const rawName = String(c.short_name || c.slug || "Circuit").trim();
-      $("live-circuit-name").textContent = /circuit$/i.test(rawName) ? rawName : `${rawName} Circuit`;
-      $("live-circuit-meta").textContent = `${(c.corners || []).length}T`;
+      $("live-circuit-name").textContent = formatCircuitHeading(c.short_name || c.slug);
+      $("live-circuit-meta").textContent = Array.isArray(c.corners) && c.corners.length ? `${c.corners.length}T` : "";
     }
-    connectWs();
-    loadSessionsForYear(qYear, qSession).then(() => {
-      if (qSession) {
-        loadReplay(qSession);
-      } else if (!qCircuit) {
-        setTimeout(() => {
-          if (!state.latestPacket && $("session-select").value) {
-            loadReplay($("session-select").value);
-          }
-        }, 900);
+
+    loadSessionsForYear(qYear, qRound, qSession).then((sessions) => {
+      // If a circuit was clicked from Page 1, match the session for that circuit if completed
+      if (qCircuit && !qRound && !qSession && sessions.length) {
+        const match = sessions.find((s) => s.completed !== false && s.circuit_slug === qCircuit);
+        if (match) $("session-select").value = String(match.round);
+      }
+      if (qView === "live") {
+        setViewMode("live");
+      } else {
+        loadFinalResults();
       }
     });
   }
@@ -949,26 +1476,11 @@
         : (circ.slug && window.F1_CIRCUITS_2D && window.F1_CIRCUITS_2D[circ.slug])
         || (window.F1_CIRCUITS_2D && window.F1_CIRCUITS_2D.las_vegas);
       if (c2d) {
-        const rawName = String(circ.name || c2d.short_name || "Circuit").trim();
-        $("pred-circuit-heading").textContent = /circuit$/i.test(rawName) ? rawName : `${rawName} Circuit`;
-        $("pred-circuit-caption").textContent = `${pkt.grand_prix || ""} · ${(c2d.corners || []).length} Turns · S1 / S2 / S3 Split`;
+        $("pred-circuit-heading").textContent = formatCircuitHeading(circ.name || c2d.short_name);
+        const turnsTxt = Array.isArray(c2d.corners) && c2d.corners.length ? ` · ${c2d.corners.length} Turns` : "";
+        $("pred-circuit-caption").textContent = `${pkt.grand_prix || ""}${turnsTxt} · S1 / S2 / S3 Split`;
         predTrackRenderer.setCircuit(c2d);
       }
-
-      const weights = [
-        ["Qualifying Grid Slot (P1–P22)", 0.41, "#E10600"],
-        ["Constructor Rolling 5-Race Points", 0.24, "#38BDF8"],
-        ["Driver 10-Race Podium Conversion", 0.19, "#FACC15"],
-        ["Circuit Overtake & Safety Car Prior", 0.16, "#10B981"],
-      ];
-      $("feature-weights-list").innerHTML = weights.map(([label, w, col]) => `
-        <div class="weight-item">
-          <div class="weight-top">
-            <span>${esc(label)}</span>
-            <span class="mono-val" style="font-weight:700">${w.toFixed(2)}</span>
-          </div>
-          <div class="pred-bar-track"><div class="pred-bar-fill" style="width:${Math.round(w * 200)}%;background:${col}"></div></div>
-        </div>`).join("");
     };
 
     const loadRounds = async (season) => {
@@ -979,8 +1491,14 @@
           const d = await r.json();
           const sessions = d.sessions || [];
           if (sessions.length) {
-            sel.innerHTML = sessions.map((s) => `<option value="${s.round || 1}">Round ${s.round || 1} — ${esc(s.grand_prix)}</option>`).join("");
-            sel.value = String(sessions[sessions.length - 1].round || 1);
+            sel.innerHTML = sessions.map((s) => {
+              const done = s.completed !== false;
+              const label = `Round ${s.round || 1} — ${s.grand_prix}${done ? "" : " (Not Completed)"}`;
+              return `<option value="${s.round || 1}" ${done ? "" : "disabled"}>${esc(label)}</option>`;
+            }).join("");
+            const completed = sessions.filter((s) => s.completed !== false);
+            const latest = completed.length ? completed[completed.length - 1] : sessions[sessions.length - 1];
+            sel.value = String(latest.round || 1);
             return;
           }
         }
@@ -988,29 +1506,97 @@
       sel.innerHTML = `<option value="1">Latest Completed Qualifying</option>`;
     };
 
-    const runForecast = async () => {
+    let forecastReqId = 0;
+    let progressTimer = null;
+
+    const startHourglassOverlay = (targetDurationMs) => {
+      clearInterval(progressTimer);
+      const overlay = $("pred-loading-overlay");
+      const stepEl = $("pred-loading-step");
+      const barEl = $("pred-loading-bar-fill");
+      const stageEl = $("pred-loading-stage-tag");
+      const elapsedEl = $("pred-loading-elapsed");
+      if (!overlay) return;
+
+      overlay.classList.remove("hidden");
+      const t0 = performance.now();
+      const update = () => {
+        const elapsedMs = performance.now() - t0;
+        const pct = Math.min(96, Math.max(6, (elapsedMs / Math.max(1000, targetDurationMs)) * 96));
+        if (barEl) barEl.style.width = `${pct.toFixed(1)}%`;
+        if (elapsedEl) elapsedEl.textContent = `${(elapsedMs / 1000).toFixed(1)}s`;
+
+        if (pct < 34) {
+          if (stageEl) stageEl.textContent = "STAGE 1 / 3";
+          if (stepEl) stepEl.textContent = "Loading 2018–2026 qualifying & starting grid data...";
+        } else if (pct < 68) {
+          if (stageEl) stageEl.textContent = "STAGE 2 / 3";
+          if (stepEl) stepEl.textContent = "Evaluating driver, constructor & circuit history...";
+        } else {
+          if (stageEl) stageEl.textContent = "STAGE 3 / 3";
+          if (stepEl) stepEl.textContent = "Computing Top-3 podium & race-win probabilities...";
+        }
+      };
+      update();
+      progressTimer = setInterval(update, 100);
+    };
+
+    const stopHourglassOverlay = () => {
+      clearInterval(progressTimer);
+      progressTimer = null;
+      const barEl = $("pred-loading-bar-fill");
+      if (barEl) barEl.style.width = "100%";
+      const overlay = $("pred-loading-overlay");
+      if (overlay) overlay.classList.add("hidden");
+    };
+
+    const runForecast = async (minDurationMs = 11000) => {
+      const reqId = ++forecastReqId;
       const season = Number($("pred-season-select").value) || 2026;
       const round = Number($("pred-round-select").value) || undefined;
-      $("btn-run-post-quali").textContent = "Computing...";
+      const btn = $("btn-run-post-quali");
+      btn.textContent = "Computing Forecast...";
+      btn.disabled = true;
+      startHourglassOverlay(minDurationMs);
+      const startedAt = performance.now();
+
       try {
-        const r = await fetch(`${state.apiBase}/api/predict/post-quali`, {
+        const fetchPromise = fetch(`${state.apiBase}/api/predict/post-quali`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ season, round }),
         });
-        if (r.ok) renderPostQuali(await r.json());
+        const [r] = await Promise.all([
+          fetchPromise,
+          new Promise((resolve) => setTimeout(resolve, minDurationMs)),
+        ]);
+        if (reqId !== forecastReqId) return;
+        if (r.ok) {
+          renderPostQuali(await r.json());
+        } else {
+          const err = await r.json().catch(() => ({}));
+          $("pred-table-list").innerHTML = `<div class="empty-state">${esc(err.detail || "Qualifying data not available for this round yet.")}</div>`;
+        }
       } finally {
-        $("btn-run-post-quali").textContent = "Run Post-Quali Forecast";
+        if (reqId === forecastReqId) {
+          const took = performance.now() - startedAt;
+          if ($("pred-loading-elapsed")) $("pred-loading-elapsed").textContent = `${(took / 1000).toFixed(1)}s`;
+          stopHourglassOverlay();
+          btn.textContent = "Run Post-Quali Forecast";
+          btn.disabled = false;
+        }
       }
     };
 
-    $("pred-season-select").addEventListener("change", (e) => loadRounds(e.target.value).then(runForecast));
-    $("btn-run-post-quali").addEventListener("click", runForecast);
-    bindSettingsPopover(() => loadRounds($("pred-season-select").value).then(runForecast));
-    loadRounds($("pred-season-select").value).then(runForecast);
+    $("pred-season-select").addEventListener("change", (e) => loadRounds(e.target.value).then(() => runForecast(11000)));
+    $("pred-round-select").addEventListener("change", () => runForecast(11000));
+    $("btn-run-post-quali").addEventListener("click", () => runForecast(11000));
+    bindSettingsPopover(() => loadRounds($("pred-season-select").value).then(() => runForecast(1800)));
+    loadRounds($("pred-season-select").value).then(() => runForecast(1800));
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    bindWindowControls();
     if (state.page === "live") initLivePage();
     else if (state.page === "predictions") initPredictionsPage();
     else initStandingsPage();

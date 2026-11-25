@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "F1 Pit-Wall — Live Telemetry & Strategy",
-  "version": "1.0.0",
-  "description": "Formula 1 live timing, 22-car tyre stint timeline, real 2D circuit map, smooth MoTeC telemetry, FIA & Team Radio with Whisper transcripts, and post-qualifying Top-3 predictions.",
+  "version": "1.1.0",
+  "description": "Resizable floating window & side-panel companion for Formula 1 live timing, 22-car tyre stints, 26 real 2D circuits, Team Radio Whisper transcripts, and Top-3 podium ML predictions.",
   "permissions": [
     "sidePanel",
-    "storage"
+    "storage",
+    "contextMenus"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
@@ -16,12 +17,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Open F1 Pit-Wall Side Panel",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+    "default_title": "Launch F1 Pit-Wall Resizable Window"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

@@ -43,6 +43,7 @@ from clients.openf1_client import OpenF1Client, OpenF1Error
 from ml.features import normalize_podium_to_percent, normalize_to_percent
 from ml.predictor import ModelNotAvailableError, PredictionError, RacePredictor
 from server.circuits import list_circuits_summary, resolve_circuit_2d
+from server.race_results import get_final_race_results
 from server.schedule import get_next_race_schedule
 from server.standings import get_pre_race_standings
 from streams.base_provider import BaseStreamProvider
@@ -261,8 +262,8 @@ class PitWallRuntime:
         except Exception as exc:  # noqa: BLE001
             LOGGER.info("Jolpica fallback grid unavailable (%s); checking active replay/live state", exc)
 
-        # 2. If Jolpica had no data, derive grid from currently loaded replay/live packet
-        if not entries_raw and self._latest_packet is not None:
+        # 2. Only fall back to active replay/live packet when no explicit round was requested
+        if not entries_raw and round_number is None and self._latest_packet is not None:
             race = self._latest_packet.get("race") or {}
             drivers = race.get("drivers") or []
             if drivers:
@@ -467,7 +468,41 @@ def create_app(
             sessions = await asyncio.to_thread(rt.replay.list_available_sessions, year)
         except OpenF1Error as exc:
             raise HTTPException(status_code=502, detail=f"OpenF1 unavailable: {exc}") from exc
+        # Cross-check completion against official Jolpica race results when available
+        try:
+            latest_done = await asyncio.to_thread(rt.jolpica.get_latest_round_with_results, year)
+            if latest_done is not None:
+                for s in sessions:
+                    if int(s.get("round") or 0) > latest_done:
+                        s["completed"] = False
+        except JolpicaError:
+            pass
         return {"year": year, "count": len(sessions), "sessions": sessions}
+
+    @app.get("/api/race-results")
+    async def api_race_results(
+        season: int = Query(default=2026, ge=2018, le=2030),
+        round: Optional[int] = Query(default=None, ge=1, le=30),
+        session_key: Optional[int] = Query(default=None),
+    ) -> Dict[str, Any]:
+        sessions_list: Optional[List[Dict[str, Any]]] = None
+        if season >= 2023:
+            try:
+                sessions_list = await asyncio.to_thread(rt.replay.list_available_sessions, season)
+            except OpenF1Error:
+                sessions_list = None
+        try:
+            return await asyncio.to_thread(
+                get_final_race_results,
+                rt.jolpica,
+                rt.openf1,
+                season=season,
+                round_number=round,
+                session_key=session_key,
+                sessions_list=sessions_list,
+            )
+        except (JolpicaError, OpenF1Error, ValueError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/next-race")
     async def api_next_race(

@@ -1,0 +1,184 @@
+{
+  "pre_race": {
+    "version": "pre_race-hgb-20261125163124",
+    "target": "is_podium",
+    "trained_at": "2026-11-25T16:31:24.459+00:00",
+    "model_name": "hgb",
+    "selected_model": "hgb",
+    "candidates": {
+      "logreg": {
+        "folds": [
+          {
+            "n_groups": 24,
+            "logloss": 0.23496226715546756,
+            "uniform_logloss": 0.4232427235346083,
+            "top1_accuracy": 0.6666666666666666,
+            "top3_accuracy": 0.6388888888888888,
+            "mean_podium_prob": 0.5055484242075193,
+            "brier": 0.07443431933621909,
+            "baseline_top3_accuracy": 0.6666666666666666,
+            "fold": "season_2024"
+          },
+          {
+            "n_groups": 24,
+            "logloss": 0.20214421234088076,
+            "uniform_logloss": 0.42324272353460834,
+            "top1_accuracy": 0.9166666666666666,
+            "top3_accuracy": 0.75,
+            "mean_podium_prob": 0.5731042925031038,
+            "brier": 0.05857078845744044,
+            "baseline_top3_accuracy": 0.75,
+            "fold": "season_2025"
+          },
+          {
+            "n_groups": 21,
+            "logloss": 0.21026053749669127,
+            "uniform_logloss": 0.3983071138052843,
+            "top1_accuracy": 0.8095238095238095,
+            "top3_accuracy": 0.6190476190476191,
+            "mean_podium_prob": 0.47151116416067274,
+            "brier": 0.06881177832823511,
+            "baseline_top3_accuracy": 0.6031746031746031,
+            "fold": "season_2026"
+          }
+        ],
+        "mean_logloss": 0.21578900566434653,
+        "mean_top1_accuracy": 0.7976190476190476,
+        "mean_top3_accuracy": 0.6693121693121693,
+        "mean_brier": 0.06727229537396488,
+        "mean_uniform_logloss": 0.4149308536248337,
+        "mean_baseline_top3_accuracy": 0.6732804232804233
+      },
+      "hgb": {
+        "folds": [
+          {
+            "n_groups": 24,
+            "logloss": 0.23394832926995668,
+            "uniform_logloss": 0.4232427235346083,
+            "top1_accuracy": 0.7083333333333334,
+            "top3_accuracy": 0.6527777777777778,
+            "mean_podium_prob": 0.5072849865549881,
+            "brier": 0.07395166655133555,
+            "baseline_top3_accuracy": 0.6666666666666666,
+            "fold": "season_2024"
+          },
+          {
+            "n_groups": 24,
+            "logloss": 0.1916484829421366,
+            "uniform_logloss": 0.42324272353460834,
+            "top1_accuracy": 0.7916666666666666,
+            "top3_accuracy": 0.8055555555555556,
+            "mean_podium_prob": 0.5699060394901986,
+            "brier": 0.05681554786972304,
+            "baseline_top3_accuracy": 0.75,
+            "fold": "season_2025"
+          },
+          {
+            "n_groups": 21,
+            "logloss": 0.20048852308057166,
+            "uniform_logloss": 0.3983071138052843,
+            "top1_accuracy": 0.8571428571428571,
+            "top3_accuracy": 0.6031746031746031,
+            "mean_podium_prob": 0.5288342391669066,
+            "brier": 0.06464556495250032,
+            "baseline_top3_accuracy": 0.6031746031746031,
+            "fold": "season_2026"
+          }
+        ],
+        "mean_logloss": 0.20869511176422165,
+        "mean_top1_accuracy": 0.7857142857142857,
+        "mean_top3_accuracy": 0.6871693121693122,
+        "mean_brier": 0.06513759312451964,
+        "mean_uniform_logloss": 0.4149308536248337,
+        "mean_baseline_top3_accuracy": 0.6732804232804233
+      }
+    },
+    "n_rows": 3920,
+    "n_groups": 194,
+    "seasons": [
+      2018,
+      2026
+    ],
+    "validation_splits": [
+      "season_2024",
+      "season_2025",
+      "season_2026"
+    ],
+    "validation": {
+      "logloss": 0.20869511176422165,
+      "top1_accuracy": 0.7857142857142857,
+      "top3_accuracy": 0.6871693121693122,
+      "brier": 0.06513759312451964,
+      "uniform_logloss": 0.4149308536248337,
+      "baseline_top3_accuracy": 0.6732804232804233
+    }
+  },
+  "in_race": {
+    "version": "in_race-logreg-20261125163131",
+    "target": "is_podium",
+    "trained_at": "2026-11-25T16:31:31.918+00:00",
+    "model_name": "logreg",
+    "selected_model": "logreg",
+    "candidates": {
+      "logreg": {
+        "folds": [
+          {
+            "n_groups": 508,
+            "logloss": 0.22037006068408482,
+            "uniform_logloss": 0.4222658261649723,
+            "top1_accuracy": 0.8818897637795275,
+            "top3_accuracy": 0.7007874015748031,
+            "mean_podium_prob": 0.6276163194097423,
+            "brier": 0.062219079442475324,
+            "baseline_top3_accuracy": 0.7250656167979003,
+            "fold": "last_20pct_of_races"
+          }
+        ],
+        "mean_logloss": 0.22037006068408482,
+        "mean_top1_accuracy": 0.8818897637795275,
+        "mean_top3_accuracy": 0.7007874015748031,
+        "mean_brier": 0.062219079442475324,
+        "mean_uniform_logloss": 0.4222658261649723,
+        "mean_baseline_top3_accuracy": 0.7250656167979003
+      },
+      "hgb": {
+        "folds": [
+          {
+            "n_groups": 508,
+            "logloss": 0.32679128034675003,
+            "uniform_logloss": 0.4222658261649723,
+            "top1_accuracy": 0.9153543307086615,
+            "top3_accuracy": 0.6863517060367454,
+            "mean_podium_prob": 0.6715025620232696,
+            "brier": 0.0672676901645784,
+            "baseline_top3_accuracy": 0.7250656167979003,
+            "fold": "last_20pct_of_races"
+          }
+        ],
+        "mean_logloss": 0.32679128034675003,
+        "mean_top1_accuracy": 0.9153543307086615,
+        "mean_top3_accuracy": 0.6863517060367454,
+        "mean_brier": 0.0672676901645784,
+        "mean_uniform_logloss": 0.4222658261649723,
+        "mean_baseline_top3_accuracy": 0.7250656167979003
+      }
+    },
+    "n_rows": 49426,
+    "n_groups": 2604,
+    "seasons": [
+      2025,
+      2026
+    ],
+    "validation_splits": [
+      "last_20pct_of_races"
+    ],
+    "validation": {
+      "logloss": 0.22037006068408482,
+      "top1_accuracy": 0.8818897637795275,
+      "top3_accuracy": 0.7007874015748031,
+      "brier": 0.062219079442475324,
+      "uniform_logloss": 0.4222658261649723,
+      "baseline_top3_accuracy": 0.7250656167979003
+    }
+  }
+}
