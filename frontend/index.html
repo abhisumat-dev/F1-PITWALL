@@ -7,48 +7,40 @@
   <meta name="color-scheme" content="dark" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>F1 Pit-Wall — Live Telemetry &amp; Strategy</title>
+  <title>F1 Pit-Wall — Standings &amp; Race Calendar</title>
   <link rel="manifest" href="pwa-manifest.json" />
   <link rel="icon" type="image/png" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=4" />
 </head>
-<body>
-  <div id="app" class="app-shell">
-    <!-- Persistent Top Command Bar -->
+<body data-page="standings">
+  <div class="app-shell">
     <header class="top-bar" role="banner">
       <div class="top-bar-left">
-        <div class="brand" aria-label="F1 Pit-Wall">
+        <a href="index.html" class="brand" aria-label="F1 Pit-Wall Home">
           <span class="brand-mark">F1</span>
           <span class="brand-name">PIT-WALL</span>
-        </div>
-
-        <nav class="screen-tabs" role="tablist" aria-label="Primary views">
-          <button type="button" class="tab-btn" role="tab" id="tab-standings" data-screen="standings" aria-selected="true" aria-controls="screen-standings">
-            <span class="tab-label-full">Before-Race Standings</span>
+        </a>
+        <nav class="screen-tabs" aria-label="Primary pages">
+          <a href="index.html" class="tab-btn is-active" aria-current="page">
+            <span class="tab-label-full">Standings &amp; Schedule</span>
             <span class="tab-label-short">Standings</span>
-          </button>
-          <button type="button" class="tab-btn" role="tab" id="tab-live" data-screen="live" aria-selected="false" aria-controls="screen-live">
-            <span class="tab-label-full">Live Race Pit-Wall</span>
-            <span class="tab-label-short">Live Race</span>
-          </button>
-          <button type="button" class="tab-btn" role="tab" id="tab-predictions" data-screen="predictions" aria-selected="false" aria-controls="screen-predictions">
+          </a>
+          <a href="live.html" class="tab-btn">
+            <span class="tab-label-full">Live &amp; Race Replay</span>
+            <span class="tab-label-short">Live / Replay</span>
+          </a>
+          <a href="predictions.html" class="tab-btn">
             <span class="tab-label-full">Post-Quali Predictions</span>
             <span class="tab-label-short">Predictions</span>
-          </button>
+          </a>
         </nav>
       </div>
 
       <div class="top-bar-right">
-        <div id="flag-pill" class="status-pill flag-green hidden" aria-live="polite">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="flag-pill-text">GREEN FLAG</span>
+        <div id="session-pill" class="session-pill">
+          <span id="session-pill-text">Loading 2026 Calendar...</span>
         </div>
-
-        <div id="session-pill" class="session-pill" title="Current race context">
-          <span id="session-pill-text">Loading schedule...</span>
-        </div>
-
-        <button type="button" id="btn-settings" class="icon-btn" aria-label="Connection and sync settings" aria-expanded="false" aria-controls="settings-popover" title="Settings &amp; Broadcast Sync">
+        <button type="button" id="btn-settings" class="icon-btn" aria-label="Server settings" aria-expanded="false" aria-controls="settings-popover" title="Connection Settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -57,367 +49,118 @@
       </div>
     </header>
 
-    <!-- Origin-aware Settings & Broadcast Sync Popover -->
+    <!-- Settings Popover -->
     <div id="settings-popover" class="settings-popover hidden" role="dialog" aria-label="Pit-Wall Settings">
       <div class="popover-head">
-        <span class="popover-title">Feed &amp; Broadcast Sync</span>
-        <button type="button" id="btn-close-settings" class="close-sm-btn" aria-label="Close settings">Close</button>
+        <span class="popover-title">Server Connection</span>
+        <button type="button" id="btn-close-settings" class="close-sm-btn">Close</button>
       </div>
       <div class="popover-body">
-        <div class="field-group">
-          <label class="field-label" for="mode-select">Stream Mode</label>
-          <div class="segmented-sm" id="mode-select">
-            <button type="button" class="seg-opt" data-mode="replay">Replay (OpenF1)</button>
-            <button type="button" class="seg-opt" data-mode="free_live">Live (SignalR)</button>
-          </div>
-        </div>
-
-        <div class="field-group">
-          <label class="field-label" for="session-select">Load Race Session</label>
-          <div class="inline-field">
-            <select id="session-select" class="ctrl-input" aria-label="Select race session"></select>
-            <button type="button" id="btn-load-session" class="btn-primary-sm">Load</button>
-          </div>
-        </div>
-
-        <div class="field-group">
-          <div class="field-label-row">
-            <label class="field-label" for="sync-delay-slider">TV Broadcast Sync Delay</label>
-            <span id="sync-delay-value" class="mono-val">0s</span>
-          </div>
-          <input type="range" id="sync-delay-slider" min="0" max="60" step="1" value="0" class="range-input" />
-          <p class="field-hint">Buffer telemetry up to 60s to match your TV or F1 TV stream delay.</p>
-        </div>
-
         <div class="field-group">
           <label class="field-label" for="api-host-input">Backend Server URL (LAN / Localhost)</label>
           <div class="inline-field">
             <input type="url" id="api-host-input" class="ctrl-input" placeholder="http://localhost:8000" autocapitalize="none" autocorrect="off" />
-            <button type="button" id="btn-save-host" class="btn-ghost-sm">Save</button>
+            <button type="button" id="btn-save-host" class="btn-primary-sm">Save</button>
           </div>
-        </div>
-
-        <div class="popover-footer-status">
-          <span id="ws-conn-status" class="mono-muted">Connecting...</span>
         </div>
       </div>
     </div>
 
-    <!-- Main Screen Container -->
-    <main class="main-content">
-
-      <!-- ================================================================= -->
-      <!-- SCREEN 1: BEFORE-RACE STANDINGS, SCHEDULE & 24 CIRCUITS           -->
-      <!-- ================================================================= -->
-      <section id="screen-standings" class="screen active" role="tabpanel" aria-labelledby="tab-standings">
-        <!-- Quick Launch Mode Strip -->
-        <div class="hub-strip">
-          <button type="button" class="hub-card is-active" data-goto="standings">
-            <div class="hub-card-top">
-              <span class="hub-card-title">Before-Race Standings &amp; Schedule</span>
-              <span class="hub-card-tag active-tag">Active</span>
-            </div>
-            <p class="hub-card-desc">Full 22-driver WDC &amp; WCC tables, multi-timezone race clock (IST / UK / US), and 24 official 2D circuits.</p>
-          </button>
-          <button type="button" class="hub-card" data-goto="live">
-            <div class="hub-card-top">
-              <span class="hub-card-title">Live Race &amp; 4Hz Replay Pit-Wall</span>
-              <span class="hub-card-tag">Open Pit-Wall</span>
-            </div>
-            <p class="hub-card-desc">22-car timing &amp; tyre stint timeline, real 2D track with S1/S2/S3 &amp; fastest lap, smooth telemetry, and Team Radio.</p>
-          </button>
-          <button type="button" class="hub-card" data-goto="predictions">
-            <div class="hub-card-top">
-              <span class="hub-card-title">Post-Quali Top-3 Forecast</span>
-              <span class="hub-card-tag">Open Predictions</span>
-            </div>
-            <p class="hub-card-desc">Dedicated Saturday post-qualifying Top-3 podium &amp; win probability breakdown across the entire grid.</p>
-          </button>
+    <main class="main-content page-standings">
+      <!-- Page Header & Quick Destination Actions -->
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Championship Standings &amp; Race Calendar</h1>
+          <p class="page-subtitle">Full 22-driver WDC &amp; 11-team WCC tables, upcoming session times in IST / UK / US, and completed race replays.</p>
         </div>
+        <div class="page-actions">
+          <a href="live.html" class="btn-primary">Open Live &amp; Replay Pit-Wall</a>
+          <a href="predictions.html" class="btn-secondary">Post-Quali Predictions</a>
+        </div>
+      </div>
 
-        <div class="standings-grid">
-          <!-- Column 1: WDC Standings -->
-          <section class="panel standings-wdc-panel">
-            <header class="panel-header">
-              <h2 class="panel-title">Drivers' World Championship</h2>
-              <span id="wdc-meta" class="meta-chip">2026</span>
-            </header>
+      <!-- Primary 2-Column Layout: Championship Standings (Left) + Next Race Schedule & Quick Replay Launcher (Right) -->
+      <div class="two-col-wide">
+        <!-- Left: Tabbed WDC / WCC Championship Table with generous spacing -->
+        <section class="panel">
+          <header class="panel-header">
+            <div class="panel-header-tabs" role="tablist" aria-label="Championship tables">
+              <button type="button" class="sub-tab active" data-standings-tab="wdc" role="tab" aria-selected="true">Drivers' Championship</button>
+              <button type="button" class="sub-tab" data-standings-tab="wcc" role="tab" aria-selected="false">Constructors' Championship</button>
+            </div>
+            <span id="wdc-meta" class="meta-chip">2026</span>
+          </header>
+
+          <div id="panel-wdc">
             <div class="table-col-head wdc-col-head">
               <span>POS</span>
               <span>DRIVER / CONSTRUCTOR</span>
               <span class="align-right">WINS</span>
-              <span class="align-right">PTS</span>
+              <span class="align-right">POINTS</span>
             </div>
-            <div id="wdc-list" class="scroll-list wdc-list"></div>
-          </section>
-
-          <!-- Column 2: WCC + Multi-Timezone Next Race Clock -->
-          <div class="standings-mid-col">
-            <section class="panel wcc-panel">
-              <header class="panel-header">
-                <h2 class="panel-title">Constructors' Championship</h2>
-                <span id="wcc-meta" class="meta-muted">All Teams</span>
-              </header>
-              <div id="wcc-list" class="scroll-list wcc-list"></div>
-            </section>
-
-            <section class="panel schedule-panel">
-              <header class="panel-header">
-                <h2 id="next-race-title" class="panel-title">Next Race Schedule</h2>
-                <span id="next-race-countdown" class="countdown-chip">--</span>
-              </header>
-              <div class="tz-col-head">
-                <span>SESSION</span>
-                <span class="align-right tz-ist">IST</span>
-                <span class="align-right tz-uk">UK</span>
-                <span class="align-right tz-us">US (ET / PT)</span>
-              </div>
-              <div id="next-race-sessions" class="schedule-list"></div>
-            </section>
+            <div id="wdc-list" class="scroll-list standings-tall-list"></div>
           </div>
 
-          <!-- Column 3: 24 Official F1 2D Circuits Catalog -->
-          <section class="panel circuits-panel">
-            <header class="panel-header">
-              <h2 class="panel-title">24 Official F1 2D Circuits</h2>
-              <span class="meta-chip accent-green">S1 · S2 · S3</span>
-            </header>
-            <div class="circuits-search-wrap">
-              <input type="search" id="circuit-search" class="ctrl-input" placeholder="Filter circuit or Grand Prix" aria-label="Filter circuits" />
+          <div id="panel-wcc" class="hidden">
+            <div class="table-col-head wcc-col-head">
+              <span>POS</span>
+              <span>CONSTRUCTOR</span>
+              <span class="align-right">WINS</span>
+              <span class="align-right">POINTS</span>
             </div>
-            <div id="circuits-catalog" class="scroll-list circuits-list"></div>
-          </section>
-        </div>
-      </section>
-
-      <!-- ================================================================= -->
-      <!-- SCREEN 2: LIVE RACE & REPLAY PIT-WALL                             -->
-      <!-- ================================================================= -->
-      <section id="screen-live" class="screen" role="tabpanel" aria-labelledby="tab-live" hidden>
-        <div class="live-grid">
-          <!-- Left Column: Full 22-Driver Timing Tower + Horizontal F1 Tyre Stint Timeline -->
-          <section class="panel timing-panel">
-            <header class="panel-header">
-              <h2 class="panel-title">Live Timing &amp; Tyre Stints</h2>
-              <span id="weather-readout" class="meta-muted mono-val">AIR --°C · TRK --°C</span>
-            </header>
-            <div class="timing-col-head">
-              <span class="col-pos">P</span>
-              <span class="col-drv">DRIVER</span>
-              <span class="col-gap">GAP</span>
-              <span class="col-sec">S1·S2·S3</span>
-              <div id="stint-ruler" class="stint-ruler" aria-label="Lap timeline scale"></div>
-            </div>
-            <div id="timing-list" class="scroll-list timing-list" role="list"></div>
-          </section>
-
-          <!-- Center Column: Real 2D Circuit Map + Smooth MoTeC Telemetry Compare -->
-          <div class="live-center-col">
-            <!-- Real 2D Circuit Map Panel -->
-            <section class="panel circuit-stage-panel">
-              <header class="panel-header circuit-stage-head">
-                <div class="circuit-head-left">
-                  <h2 id="live-circuit-name" class="panel-title">Las Vegas Strip Circuit</h2>
-                  <span id="live-circuit-meta" class="meta-muted mono-val">17T</span>
-                </div>
-                <div id="fastest-lap-banner" class="fastest-lap-pill" aria-live="polite">
-                  <span class="fl-tag">FASTEST LAP</span>
-                  <span id="fastest-lap-val" class="mono-val">--:--.---</span>
-                </div>
-              </header>
-
-              <div class="canvas-stage" id="track-stage">
-                <canvas id="track-canvas" aria-label="2D Formula 1 circuit map with live car positions and sector splits"></canvas>
-                <div id="gps-lock-overlay" class="lock-banner hidden" role="status">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                  </svg>
-                  <span>Live GPS Locked — Available Post-Race</span>
-                </div>
-              </div>
-
-              <!-- Fastest Sector 1, Sector 2, Sector 3 Cards -->
-              <div class="sector-records-row">
-                <div class="sector-rec s1">
-                  <div class="sector-rec-meta">
-                    <span class="sec-k s1-text">S1 FASTEST</span>
-                    <span id="s1-best-who" class="sec-who">--</span>
-                  </div>
-                  <span id="s1-best-time" class="sec-time mono-val">--.---s</span>
-                </div>
-                <div class="sector-rec s2">
-                  <div class="sector-rec-meta">
-                    <span class="sec-k s2-text">S2 FASTEST</span>
-                    <span id="s2-best-who" class="sec-who">--</span>
-                  </div>
-                  <span id="s2-best-time" class="sec-time mono-val">--.---s</span>
-                </div>
-                <div class="sector-rec s3">
-                  <div class="sector-rec-meta">
-                    <span class="sec-k s3-text">S3 FASTEST</span>
-                    <span id="s3-best-who" class="sec-who">--</span>
-                  </div>
-                  <span id="s3-best-time" class="sec-time mono-val">--.---s</span>
-                </div>
-              </div>
-            </section>
-
-            <!-- Smooth Labeled MoTeC Telemetry Compare Panel -->
-            <section class="panel telemetry-panel">
-              <header class="panel-header telemetry-head">
-                <h2 class="panel-title">Car Telemetry · 4Hz Spline</h2>
-                <div class="telem-badges">
-                  <span id="telem-drv-a" class="drv-chip chip-a">VER -- KPH</span>
-                  <span id="telem-drv-b" class="drv-chip chip-b">NOR -- KPH</span>
-                  <span id="telem-drs-badge" class="meta-chip">DRS N/A</span>
-                </div>
-              </header>
-
-              <div class="telemetry-canvas-wrap">
-                <canvas id="telemetry-canvas" aria-label="Smooth telemetry comparison graphs for Speed, Throttle, and Brake"></canvas>
-                <div id="telem-lock-overlay" class="lock-banner hidden" role="status">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                  </svg>
-                  <span>Live Telemetry Locked — Available Post-Race</span>
-                </div>
-              </div>
-
-              <!-- Replay Transport Controls -->
-              <div id="replay-controls" class="transport-bar">
-                <button type="button" id="btn-play-pause" class="transport-play-btn">Play</button>
-                <div class="speed-group" role="group" aria-label="Replay speed">
-                  <button type="button" class="spd-btn" data-speed="1">1x</button>
-                  <button type="button" class="spd-btn" data-speed="2">2x</button>
-                  <button type="button" class="spd-btn active" data-speed="4">4x</button>
-                  <button type="button" class="spd-btn" data-speed="10">10x</button>
-                </div>
-                <div class="seek-group">
-                  <label for="seek-lap-input" class="seek-lbl">LAP</label>
-                  <input type="range" id="seek-lap-input" min="1" max="50" value="1" class="range-input seek-slider" aria-label="Seek to lap" />
-                  <span id="seek-lap-readout" class="mono-val seek-val">1/50</span>
-                </div>
-              </div>
-            </section>
+            <div id="wcc-list" class="scroll-list standings-tall-list"></div>
           </div>
+        </section>
 
-          <!-- Right Column: FIA Race Control & Live Team Radio (with Whisper Transcripts) -->
-          <aside class="panel comms-panel" aria-label="FIA Race Control and Team Radio">
+        <!-- Right: Next Race Multi-Timezone Clock + Completed Season Races (Launch directly into live.html!) -->
+        <div class="stack-col">
+          <section class="panel">
             <header class="panel-header">
-              <h2 class="panel-title">FIA Control &amp; Team Radio</h2>
-              <button type="button" id="btn-open-comms-full" class="icon-btn-sm" title="Full Race Control &amp; Radio view" aria-label="Open full Race Control and Team Radio panel">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="15 3 21 3 21 9"></polyline>
-                  <polyline points="9 21 3 21 3 15"></polyline>
-                  <line x1="21" y1="3" x2="14" y2="10"></line>
-                  <line x1="3" y1="21" x2="10" y2="14"></line>
-                </svg>
-              </button>
+              <h2 id="next-race-title" class="panel-title">Next Race Schedule</h2>
+              <span id="next-race-countdown" class="countdown-chip">--</span>
             </header>
-
-            <div class="comms-filter-row" role="tablist" aria-label="Filter communications">
-              <button type="button" class="filter-pill active" data-comms-filter="all">All <span id="comms-count-all">0</span></button>
-              <button type="button" class="filter-pill" data-comms-filter="fia">FIA Flags</button>
-              <button type="button" class="filter-pill" data-comms-filter="radio">Team Radio</button>
+            <div class="tz-col-head">
+              <span>SESSION</span>
+              <span class="align-right tz-ist">IST (INDIA)</span>
+              <span class="align-right tz-uk">UK</span>
+              <span class="align-right tz-us">US (ET / PT)</span>
             </div>
+            <div id="next-race-sessions" class="schedule-list"></div>
+          </section>
 
-            <div id="comms-feed" class="scroll-list comms-list"></div>
-          </aside>
+          <section class="panel">
+            <header class="panel-header">
+              <h2 class="panel-title">Watch Past Race Replays &amp; Results</h2>
+              <select id="season-replay-year" class="ctrl-input-sm" aria-label="Replay season year">
+                <option value="2026">2026</option>
+                <option value="2025">2025</option>
+                <option value="2024">2024</option>
+                <option value="2023">2023</option>
+              </select>
+            </header>
+            <div id="past-races-list" class="scroll-list past-races-list"></div>
+          </section>
         </div>
-      </section>
+      </div>
 
-      <!-- ================================================================= -->
-      <!-- SCREEN 3: SEPARATE POST-QUALIFYING PREDICTIONS PAGE               -->
-      <!-- ================================================================= -->
-      <section id="screen-predictions" class="screen" role="tabpanel" aria-labelledby="tab-predictions" hidden>
-        <div class="pred-toolbar">
-          <div class="pred-selectors">
-            <select id="pred-season-select" class="ctrl-input" aria-label="Prediction season">
-              <option value="2026">Season 2026</option>
-              <option value="2025">Season 2025</option>
-              <option value="2024">Season 2024</option>
-            </select>
-            <select id="pred-round-select" class="ctrl-input" aria-label="Prediction round"></select>
+      <!-- Full-Width Spacious 24 Official F1 2D Circuits Grid -->
+      <section class="panel">
+        <header class="panel-header">
+          <div class="circuit-head-left">
+            <h2 class="panel-title">24 Official F1 2D Circuits</h2>
+            <span class="meta-chip accent-green">S1 · S2 · S3 Geometry</span>
           </div>
-          <button type="button" id="btn-run-post-quali" class="btn-primary">Run Post-Quali Forecast</button>
-        </div>
-
-        <!-- Projected Top-3 Hero Row -->
-        <div id="pred-podium-cards" class="podium-hero-grid"></div>
-
-        <!-- Main Split: Full 22-Driver Probability Table + Dynamic Circuit Panel -->
-        <div class="pred-main-grid">
-          <section class="panel pred-table-panel">
-            <header class="panel-header">
-              <h2 class="panel-title">After-Qualifying Full Grid Podium &amp; Win Probabilities</h2>
-              <span id="pred-gp-meta" class="meta-muted mono-val"></span>
-            </header>
-            <div class="table-col-head pred-col-head">
-              <span>RANK</span>
-              <span>GRID</span>
-              <span>DRIVER / CONSTRUCTOR</span>
-              <span>TOP-3 PODIUM PROBABILITY</span>
-              <span class="align-right">PODIUM %</span>
-              <span class="align-right">WIN %</span>
-            </div>
-            <div id="pred-table-list" class="scroll-list pred-list"></div>
-          </section>
-
-          <section class="panel pred-circuit-panel">
-            <header class="panel-header">
-              <h2 id="pred-circuit-heading" class="panel-title">Las Vegas Circuit</h2>
-            </header>
-            <div class="pred-circuit-canvas-wrap">
-              <canvas id="pred-circuit-canvas" aria-label="Selected circuit 2D outline with sector splits"></canvas>
-              <p id="pred-circuit-caption" class="pred-circuit-caption mono-muted"></p>
-            </div>
-            <div class="feature-weights-block">
-              <h3 class="sub-heading">Walk-Forward Validation &amp; Feature Weights (2018–2026)</h3>
-              <div id="feature-weights-list" class="weights-list"></div>
-            </div>
-          </section>
-        </div>
+          <div class="header-search-wrap">
+            <input type="search" id="circuit-search" class="ctrl-input" placeholder="Filter circuit or Grand Prix" aria-label="Filter circuits" />
+          </div>
+        </header>
+        <div id="circuits-catalog" class="circuits-grid"></div>
       </section>
     </main>
-
-    <!-- Full Race Control & Team Radio Slide-Over Panel -->
-    <div id="comms-backdrop" class="drawer-backdrop hidden" aria-hidden="true"></div>
-    <aside id="comms-drawer" class="comms-drawer hidden" role="dialog" aria-modal="true" aria-label="Race Control and Team Radio">
-      <header class="drawer-head">
-        <h2 class="drawer-title">Race Control &amp; Team Radio</h2>
-        <button type="button" id="btn-close-comms-drawer" class="close-sm-btn">ESC to close</button>
-      </header>
-      <div class="drawer-toolbar">
-        <div class="comms-filter-row" role="tablist">
-          <button type="button" class="filter-pill active" data-drawer-filter="all">All Events</button>
-          <button type="button" class="filter-pill" data-drawer-filter="fia">FIA Stewards</button>
-          <button type="button" class="filter-pill" data-drawer-filter="radio">Team Radio</button>
-        </div>
-        <label class="autoplay-toggle">
-          <input type="checkbox" id="radio-autoplay-check" />
-          <span>Auto-Play Radio</span>
-        </label>
-      </div>
-      <div id="comms-drawer-list" class="scroll-list comms-drawer-list"></div>
-    </aside>
-
-    <!-- Shared Hidden Audio Element for Real Team Radio MP3 Playback -->
-    <audio id="radio-audio-player" preload="none"></audio>
-
-    <!-- Dev-Only Break-UI Stress Test Bar (visible ONLY when ?data=worst or ?debug=1) -->
-    <div id="debug-fixture-bar" class="debug-bar hidden" role="region" aria-label="Developer stress test switcher">
-      <button type="button" data-fixture="live">Live / Demo</button>
-      <button type="button" data-fixture="worst">Worst Case</button>
-      <button type="button" data-fixture="empty">Empty</button>
-      <button type="button" data-fixture="free_live">Free Live Lock</button>
-    </div>
   </div>
 
-  <script src="circuits_data.js?v=2"></script>
-  <script src="track_canvas.js?v=2"></script>
-  <script src="telemetry_chart.js?v=2"></script>
-  <script src="app.js?v=3"></script>
+  <script src="circuits_data.js?v=4"></script>
+  <script src="track_canvas.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

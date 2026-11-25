@@ -1,0 +1,165 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0B0E14" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>F1 Pit-Wall â€” Standings &amp; Race Calendar</title>
+  <link rel="icon" type="image/png" href="icons/icon48.png" />
+  <link rel="stylesheet" href="styles.css?v=4" />
+</head>
+<body data-page="standings">
+  <div class="app-shell">
+    <header class="top-bar" role="banner">
+      <div class="top-bar-left">
+        <a href="index.html" class="brand" aria-label="F1 Pit-Wall Home">
+          <span class="brand-mark">F1</span>
+          <span class="brand-name">PIT-WALL</span>
+        </a>
+        <nav class="screen-tabs" aria-label="Primary pages">
+          <a href="index.html" class="tab-btn is-active" aria-current="page">
+            <span class="tab-label-full">Standings &amp; Schedule</span>
+            <span class="tab-label-short">Standings</span>
+          </a>
+          <a href="live.html" class="tab-btn">
+            <span class="tab-label-full">Live &amp; Race Replay</span>
+            <span class="tab-label-short">Live / Replay</span>
+          </a>
+          <a href="predictions.html" class="tab-btn">
+            <span class="tab-label-full">Post-Quali Predictions</span>
+            <span class="tab-label-short">Predictions</span>
+          </a>
+        </nav>
+      </div>
+
+      <div class="top-bar-right">
+        <div id="session-pill" class="session-pill">
+          <span id="session-pill-text">Loading 2026 Calendar...</span>
+        </div>
+        <button type="button" id="btn-settings" class="icon-btn" aria-label="Server settings" aria-expanded="false" aria-controls="settings-popover" title="Connection Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Settings Popover -->
+    <div id="settings-popover" class="settings-popover hidden" role="dialog" aria-label="Pit-Wall Settings">
+      <div class="popover-head">
+        <span class="popover-title">Server Connection</span>
+        <button type="button" id="btn-close-settings" class="close-sm-btn">Close</button>
+      </div>
+      <div class="popover-body">
+        <div class="field-group">
+          <label class="field-label" for="api-host-input">Backend Server URL (LAN / Localhost)</label>
+          <div class="inline-field">
+            <input type="url" id="api-host-input" class="ctrl-input" placeholder="http://localhost:8000" autocapitalize="none" autocorrect="off" />
+            <button type="button" id="btn-save-host" class="btn-primary-sm">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <main class="main-content page-standings">
+      <!-- Page Header & Quick Destination Actions -->
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Championship Standings &amp; Race Calendar</h1>
+          <p class="page-subtitle">Full 22-driver WDC &amp; 11-team WCC tables, upcoming session times in IST / UK / US, and completed race replays.</p>
+        </div>
+        <div class="page-actions">
+          <a href="live.html" class="btn-primary">Open Live &amp; Replay Pit-Wall</a>
+          <a href="predictions.html" class="btn-secondary">Post-Quali Predictions</a>
+        </div>
+      </div>
+
+      <!-- Primary 2-Column Layout: Championship Standings (Left) + Next Race Schedule & Quick Replay Launcher (Right) -->
+      <div class="two-col-wide">
+        <!-- Left: Tabbed WDC / WCC Championship Table with generous spacing -->
+        <section class="panel">
+          <header class="panel-header">
+            <div class="panel-header-tabs" role="tablist" aria-label="Championship tables">
+              <button type="button" class="sub-tab active" data-standings-tab="wdc" role="tab" aria-selected="true">Drivers' Championship</button>
+              <button type="button" class="sub-tab" data-standings-tab="wcc" role="tab" aria-selected="false">Constructors' Championship</button>
+            </div>
+            <span id="wdc-meta" class="meta-chip">2026</span>
+          </header>
+
+          <div id="panel-wdc">
+            <div class="table-col-head wdc-col-head">
+              <span>POS</span>
+              <span>DRIVER / CONSTRUCTOR</span>
+              <span class="align-right">WINS</span>
+              <span class="align-right">POINTS</span>
+            </div>
+            <div id="wdc-list" class="scroll-list standings-tall-list"></div>
+          </div>
+
+          <div id="panel-wcc" class="hidden">
+            <div class="table-col-head wcc-col-head">
+              <span>POS</span>
+              <span>CONSTRUCTOR</span>
+              <span class="align-right">WINS</span>
+              <span class="align-right">POINTS</span>
+            </div>
+            <div id="wcc-list" class="scroll-list standings-tall-list"></div>
+          </div>
+        </section>
+
+        <!-- Right: Next Race Multi-Timezone Clock + Completed Season Races (Launch directly into live.html!) -->
+        <div class="stack-col">
+          <section class="panel">
+            <header class="panel-header">
+              <h2 id="next-race-title" class="panel-title">Next Race Schedule</h2>
+              <span id="next-race-countdown" class="countdown-chip">--</span>
+            </header>
+            <div class="tz-col-head">
+              <span>SESSION</span>
+              <span class="align-right tz-ist">IST (INDIA)</span>
+              <span class="align-right tz-uk">UK</span>
+              <span class="align-right tz-us">US (ET / PT)</span>
+            </div>
+            <div id="next-race-sessions" class="schedule-list"></div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-header">
+              <h2 class="panel-title">Watch Past Race Replays &amp; Results</h2>
+              <select id="season-replay-year" class="ctrl-input-sm" aria-label="Replay season year">
+                <option value="2026">2026</option>
+                <option value="2025">2025</option>
+                <option value="2024">2024</option>
+                <option value="2023">2023</option>
+              </select>
+            </header>
+            <div id="past-races-list" class="scroll-list past-races-list"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Full-Width Spacious 24 Official F1 2D Circuits Grid -->
+      <section class="panel">
+        <header class="panel-header">
+          <div class="circuit-head-left">
+            <h2 class="panel-title">24 Official F1 2D Circuits</h2>
+            <span class="meta-chip accent-green">S1 Â· S2 Â· S3 Geometry</span>
+          </div>
+          <div class="header-search-wrap">
+            <input type="search" id="circuit-search" class="ctrl-input" placeholder="Filter circuit or Grand Prix" aria-label="Filter circuits" />
+          </div>
+        </header>
+        <div id="circuits-catalog" class="circuits-grid"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="circuits_data.js?v=4"></script>
+  <script src="track_canvas.js?v=4"></script>
+  <script src="app.js?v=4"></script>
+</body>
+</html>
