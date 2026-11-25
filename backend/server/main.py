@@ -37,11 +37,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import config
+from analytics.radio_transcriber import RadioTranscriber
 from clients.jolpica_client import JolpicaClient, JolpicaError
 from clients.openf1_client import OpenF1Client, OpenF1Error
 from ml.features import normalize_podium_to_percent, normalize_to_percent
 from ml.predictor import ModelNotAvailableError, PredictionError, RacePredictor
+from server.circuits import list_circuits_summary, resolve_circuit_2d
 from server.schedule import get_next_race_schedule
+from server.standings import get_pre_race_standings
 from streams.base_provider import BaseStreamProvider
 from streams.replay_engine import ReplayEngine
 from streams.signalr_live import SignalRLiveProvider
@@ -93,6 +96,7 @@ class PitWallRuntime:
         jolpica: Optional[JolpicaClient] = None,
         openf1: Optional[OpenF1Client] = None,
         predictor: Optional[RacePredictor] = None,
+        transcriber: Optional[RadioTranscriber] = None,
         replay: Optional[ReplayEngine] = None,
         live: Optional[SignalRLiveProvider] = None,
         initial_mode: Literal["replay", "free_live"] = "replay",
@@ -101,8 +105,13 @@ class PitWallRuntime:
         self.jolpica = jolpica or JolpicaClient()
         self.openf1 = openf1 or OpenF1Client()
         self.predictor = predictor or RacePredictor(jolpica=self.jolpica, openf1=self.openf1)
-        self.replay = replay or ReplayEngine(openf1=self.openf1, predictor=self.predictor)
-        self.live = live or SignalRLiveProvider(predictor=self.predictor)
+        self.transcriber = transcriber or RadioTranscriber()
+        self.replay = replay or ReplayEngine(
+            openf1=self.openf1, predictor=self.predictor, transcriber=self.transcriber
+        )
+        self.live = live or SignalRLiveProvider(
+            predictor=self.predictor, transcriber=self.transcriber
+        )
 
         self.mode: Literal["replay", "free_live"] = initial_mode
         self._clients: Set[asyncio.Queue[Dict[str, Any]]] = set()
@@ -354,6 +363,37 @@ class PitWallRuntime:
         except (ModelNotAvailableError, PredictionError, JolpicaError) as exc:
             LOGGER.info("Using post-quali fallback (%s)", exc)
             packet = self._fallback_post_quali_packet(season, round_number)
+
+        # Enrich circuit block with official 2D geometry if matched
+        circ = packet.get("circuit") or {}
+        c2d = resolve_circuit_2d(
+            circuit_id=circ.get("circuit_id"),
+            name=circ.get("name"),
+            grand_prix=packet.get("grand_prix"),
+        )
+        if c2d:
+            circ["slug"] = c2d.get("slug")
+            if circ.get("rotation_deg") is None and c2d.get("rotation_deg") is not None:
+                circ["rotation_deg"] = float(c2d["rotation_deg"])
+            circ["track_outline"] = [{"x": float(p["x"]), "y": float(p["y"])} for p in (c2d.get("points") or [])] or None
+            circ["sector_splits"] = [int(i) for i in (c2d.get("sector_splits") or [])] or None
+            sf = c2d.get("start_finish")
+            circ["start_finish"] = (
+                {"x": float(sf["x"]), "y": float(sf["y"])}
+                if isinstance(sf, dict) and "x" in sf and "y" in sf
+                else None
+            )
+            circ["corners"] = [
+                {
+                    "number": int(c["number"]),
+                    "letter": str(c.get("letter") or "") or None,
+                    "x": float(c["x"]),
+                    "y": float(c["y"]),
+                }
+                for c in (c2d.get("corners") or [])
+            ] or None
+            packet["circuit"] = circ
+
         self._last_post_quali = packet
         return packet
 
@@ -437,6 +477,34 @@ def create_app(
             return await asyncio.to_thread(get_next_race_schedule, rt.jolpica, season=season)
         except (JolpicaError, ValueError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/standings")
+    async def api_standings(
+        season: Optional[int] = Query(default=None, ge=2018, le=2030),
+    ) -> Dict[str, Any]:
+        try:
+            return await asyncio.to_thread(get_pre_race_standings, rt.jolpica, season=season)
+        except JolpicaError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/circuits")
+    async def api_circuits() -> Dict[str, Any]:
+        items = list_circuits_summary()
+        return {"count": len(items), "circuits": items}
+
+    @app.get("/api/circuits/{circuit_id}")
+    async def api_circuit_detail(circuit_id: str) -> Dict[str, Any]:
+        c2d = resolve_circuit_2d(circuit_id=circuit_id, name=circuit_id, grand_prix=circuit_id)
+        if not c2d:
+            raise HTTPException(status_code=404, detail=f"Circuit '{circuit_id}' not found.")
+        return c2d
+
+    @app.get("/api/radio/transcribe")
+    async def api_radio_transcribe(url: str = Query(..., min_length=12)) -> Dict[str, Any]:
+        try:
+            return await asyncio.to_thread(rt.transcriber.transcribe_url, url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/predict/post-quali")
     async def api_predict_post_quali(body: Optional[PostQualiRequest] = None) -> Dict[str, Any]:

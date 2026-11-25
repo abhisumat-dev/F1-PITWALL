@@ -124,9 +124,11 @@ SIGNALR_NEGOTIATE_URL: str = _env_str(
 LIVE_TOPICS: Tuple[str, ...] = (
     "TimingData",
     "TimingAppData",
+    "TimingStats",
     "LapCount",
     "WeatherData",
     "RaceControlMessages",
+    "TeamRadio",
     "DriverList",
 )
 # Optional credential hook: when set, Position.z / CarData.z unlock.

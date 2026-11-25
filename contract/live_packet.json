@@ -53,12 +53,24 @@
         "y": { "type": "number" }
       }
     },
+    "CircuitCorner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "x", "y"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "letter": { "type": ["string", "null"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
     "Circuit": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "rotation_deg"],
       "properties": {
         "circuit_id": { "type": ["string", "null"] },
+        "slug": { "type": ["string", "null"] },
         "name": { "type": ["string", "null"] },
         "rotation_deg": {
           "type": ["number", "null"],
@@ -67,7 +79,84 @@
         "track_outline": {
           "type": ["array", "null"],
           "items": { "$ref": "#/$defs/TrackPoint" }
+        },
+        "sector_splits": {
+          "type": ["array", "null"],
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "start_finish": {
+          "anyOf": [{ "$ref": "#/$defs/TrackPoint" }, { "type": "null" }]
+        },
+        "corners": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/CircuitCorner" }
         }
+      }
+    },
+    "BestTimingRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["driver_number", "driver_code", "time_s", "formatted"],
+      "properties": {
+        "driver_number": { "type": "integer", "minimum": 0 },
+        "driver_code": { "type": "string" },
+        "team_name": { "type": ["string", "null"] },
+        "team_colour": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9A-Fa-f]{6}$"
+        },
+        "time_s": { "type": "number", "exclusiveMinimum": 0 },
+        "formatted": { "type": "string" },
+        "lap_number": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "SessionBest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fastest_lap", "fastest_s1", "fastest_s2", "fastest_s3"],
+      "properties": {
+        "fastest_lap": {
+          "anyOf": [{ "$ref": "#/$defs/BestTimingRecord" }, { "type": "null" }]
+        },
+        "fastest_s1": {
+          "anyOf": [{ "$ref": "#/$defs/BestTimingRecord" }, { "type": "null" }]
+        },
+        "fastest_s2": {
+          "anyOf": [{ "$ref": "#/$defs/BestTimingRecord" }, { "type": "null" }]
+        },
+        "fastest_s3": {
+          "anyOf": [{ "$ref": "#/$defs/BestTimingRecord" }, { "type": "null" }]
+        }
+      }
+    },
+    "DriverSectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["s1_s", "s2_s", "s3_s", "s1_status", "s2_status", "s3_status"],
+      "properties": {
+        "s1_s": { "type": ["number", "null"] },
+        "s2_s": { "type": ["number", "null"] },
+        "s3_s": { "type": ["number", "null"] },
+        "s1_status": { "type": "string", "enum": ["PURPLE", "GREEN", "YELLOW", "NONE"] },
+        "s2_status": { "type": "string", "enum": ["PURPLE", "GREEN", "YELLOW", "NONE"] },
+        "s3_status": { "type": "string", "enum": ["PURPLE", "GREEN", "YELLOW", "NONE"] }
+      }
+    },
+    "TeamRadioClip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "driver_number", "recording_url"],
+      "properties": {
+        "date": { "$ref": "#/$defs/Timestamp" },
+        "driver_number": { "type": "integer", "minimum": 0 },
+        "driver_code": { "type": ["string", "null"] },
+        "team_name": { "type": ["string", "null"] },
+        "team_colour": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9A-Fa-f]{6}$"
+        },
+        "recording_url": { "type": "string" },
+        "transcript": { "type": ["string", "null"] }
       }
     },
     "Weather": {
@@ -239,6 +328,9 @@
         },
         "telemetry": {
           "anyOf": [{ "$ref": "#/$defs/CarTelemetry" }, { "type": "null" }]
+        },
+        "sectors": {
+          "anyOf": [{ "$ref": "#/$defs/DriverSectors" }, { "type": "null" }]
         }
       }
     },
@@ -320,6 +412,13 @@
         "race_control": {
           "type": "array",
           "items": { "$ref": "#/$defs/RaceControlMessage" }
+        },
+        "team_radio": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TeamRadioClip" }
+        },
+        "session_best": {
+          "anyOf": [{ "$ref": "#/$defs/SessionBest" }, { "type": "null" }]
         },
         "predictions": {
           "anyOf": [{ "$ref": "#/$defs/LivePredictionBlock" }, { "type": "null" }]

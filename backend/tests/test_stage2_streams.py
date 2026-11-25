@@ -129,7 +129,18 @@ def test_replay_engine_4hz_frame_contract_rotation_and_controls(validator: Draft
         for lap in range(1, 9):
             ls = t0 + (lap - 1) * 90.0 + pos_idx * 0.5
             dur = 90.0 + pos_idx * 0.15 + lap * 0.02
-            laps.append({"driver_number": dn, "lap_number": lap, "date_start": iso(ls), "lap_duration": dur, "is_pit_out_lap": False})
+            laps.append(
+                {
+                    "driver_number": dn,
+                    "lap_number": lap,
+                    "date_start": iso(ls),
+                    "lap_duration": dur,
+                    "duration_sector_1": 26.5 + pos_idx * 0.05,
+                    "duration_sector_2": 31.0 + pos_idx * 0.05,
+                    "duration_sector_3": dur - (26.5 + pos_idx * 0.05) - (31.0 + pos_idx * 0.05),
+                    "is_pit_out_lap": False,
+                }
+            )
             positions.append({"driver_number": dn, "date": iso(ls), "position": pos_idx})
             intervals.append({"driver_number": dn, "date": iso(ls), "gap_to_leader": (pos_idx - 1) * 1.4, "interval": 0.0 if pos_idx == 1 else 1.4})
         # High-frequency location & car_data (2026 null drs)
@@ -156,6 +167,13 @@ def test_replay_engine_4hz_frame_contract_rotation_and_controls(validator: Draft
         intervals=intervals,
         stints=stints,
         pits=[],
+        team_radio=[
+            {
+                "driver_number": 1,
+                "date": iso(t0 + 200.0),
+                "recording_url": "https://livetiming.formula1.com/static/radio_ver_1.mp3",
+            }
+        ],
         locations=locations,
         car_data=car_data,
         session_result=[
@@ -177,8 +195,20 @@ def test_replay_engine_4hz_frame_contract_rotation_and_controls(validator: Draft
 
     assert frame["type"] == "replay_frame"
     assert frame["capabilities"] == {"gps_available": True, "telemetry_available": True}
+    assert frame["circuit"]["slug"] == "las_vegas"
     assert frame["circuit"]["track_outline"] is not None
-    assert len(frame["circuit"]["track_outline"]) >= 10
+    assert len(frame["circuit"]["track_outline"]) == 260
+    assert len(frame["circuit"]["corners"]) == 17
+    assert len(frame["circuit"]["sector_splits"]) == 4
+
+    # Session fastest S1, S2, S3, Fastest Lap & Team Radio verified
+    sb = frame["race"]["session_best"]
+    assert sb["fastest_lap"]["driver_code"] == "VER"
+    assert sb["fastest_s1"]["driver_code"] == "VER"
+    assert sb["fastest_s2"]["driver_code"] == "VER"
+    assert sb["fastest_s3"]["driver_code"] == "VER"
+    assert len(frame["race"]["team_radio"]) == 1
+    assert frame["race"]["team_radio"][0]["driver_code"] == "VER"
 
     # 2026 nullable DRS preserved as None
     ver = next(d for d in frame["race"]["drivers"] if d["driver_number"] == 1)
@@ -232,9 +262,28 @@ def test_signalr_deep_merge_and_atomic_persistence(tmp_path: Path, validator: Dr
             },
             "TimingData": {
                 "Lines": {
-                    "1": {"Position": "1", "GapToLeader": "", "NumberOfLaps": 12, "LastLapTime": {"Value": "1:33.100"}},
-                    "4": {"Position": "2", "GapToLeader": "+1.850", "IntervalToPositionAhead": {"Value": "+1.850"}, "NumberOfLaps": 12},
-                    "16": {"Position": "3", "GapToLeader": "+4.200", "IntervalToPositionAhead": {"Value": "+2.350"}, "NumberOfLaps": 12},
+                    "1": {
+                        "Position": "1",
+                        "GapToLeader": "",
+                        "NumberOfLaps": 12,
+                        "LastLapTime": {"Value": "1:33.100"},
+                        "BestLapTime": {"Value": "1:32.008", "Lap": 11},
+                        "Sectors": {"0": {"Value": "26.812"}, "1": {"Value": "31.200"}, "2": {"Value": "33.996"}},
+                    },
+                    "4": {
+                        "Position": "2",
+                        "GapToLeader": "+1.850",
+                        "IntervalToPositionAhead": {"Value": "+1.850"},
+                        "NumberOfLaps": 12,
+                        "Sectors": {"0": {"Value": "26.950"}, "1": {"Value": "31.044"}, "2": {"Value": "34.110"}},
+                    },
+                    "16": {
+                        "Position": "3",
+                        "GapToLeader": "+4.200",
+                        "IntervalToPositionAhead": {"Value": "+2.350"},
+                        "NumberOfLaps": 12,
+                        "Sectors": {"0": {"Value": "27.010"}, "1": {"Value": "31.300"}, "2": {"Value": "33.918"}},
+                    },
                     "12": {"Position": "4", "GapToLeader": "+6.100", "IntervalToPositionAhead": {"Value": "+1.900"}, "NumberOfLaps": 12},
                 }
             },
@@ -250,6 +299,7 @@ def test_signalr_deep_merge_and_atomic_persistence(tmp_path: Path, validator: Dr
             "WeatherData": {"AirTemp": "17.2", "TrackTemp": "21.5", "Humidity": "38", "Pressure": "944.0", "WindSpeed": "1.2", "WindDirection": "180", "Rainfall": "0"},
             "TrackStatus": {"Status": "1", "Message": "AllClear"},
             "RaceControlMessages": {"Messages": {"0": {"Utc": "2026-11-22T04:01:00Z", "Lap": 1, "Category": "Flag", "Flag": "GREEN", "Message": "GREEN LIGHT"}}},
+            "TeamRadio": {"Captures": {"0": {"Utc": "2026-11-22T04:12:30Z", "RacingNumber": "4", "Path": "TeamRadio/LANNOR01.mp3"}}},
         },
     }
     delta_frame = {
@@ -277,6 +327,14 @@ def test_signalr_deep_merge_and_atomic_persistence(tmp_path: Path, validator: Dr
     assert packet["mode"] == "free_live"
     assert packet["telemetry_unlocked"] is False
     assert packet["capabilities"] == {"gps_available": False, "telemetry_available": False}
+    assert packet["circuit"]["slug"] == "las_vegas"
+    assert len(packet["circuit"]["track_outline"]) == 260
+    assert packet["race"]["session_best"]["fastest_lap"]["driver_code"] == "VER"
+    assert packet["race"]["session_best"]["fastest_s1"]["driver_code"] == "VER"
+    assert packet["race"]["session_best"]["fastest_s2"]["driver_code"] == "NOR"
+    assert packet["race"]["session_best"]["fastest_s3"]["driver_code"] == "LEC"
+    assert len(packet["race"]["team_radio"]) == 1
+    assert packet["race"]["team_radio"][0]["driver_code"] == "NOR"
 
     # Verify locked GPS/telemetry fields are strictly null in free_live mode
     for d in packet["race"]["drivers"]:

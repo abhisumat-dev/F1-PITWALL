@@ -29,6 +29,8 @@ import numpy as np
 import pandas as pd
 
 import config
+from analytics.radio_transcriber import RadioTranscriber
+from analytics.sectors_fastest import SectorAndLapTracker
 from analytics.tyre_deg import TyreDegTracker
 from clients.openf1_client import OpenF1Client, parse_iso_datetime
 from ml.features import (
@@ -40,6 +42,7 @@ from ml.features import (
     track_state_timeline,
 )
 from ml.predictor import RaceContext, RacePredictor, is_driver_out
+from server.circuits import resolve_circuit_2d
 from streams.base_provider import BaseStreamProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -220,15 +223,21 @@ class ReplayEngine(BaseStreamProvider):
         *,
         openf1: Optional[OpenF1Client] = None,
         predictor: Optional[RacePredictor] = None,
+        transcriber: Optional[RadioTranscriber] = None,
         tick_interval_s: float = 0.25,
     ) -> None:
         super().__init__(mode="replay")
         self.openf1 = openf1 or OpenF1Client()
         self.predictor = predictor
+        self.transcriber = transcriber
         self.tick_interval_s = max(0.05, float(tick_interval_s))
 
         self._meta: Optional[_SessionMeta] = None
         self._track_outline: Optional[List[Dict[str, float]]] = None
+        self._circuit_slug: Optional[str] = None
+        self._circuit_corners: Optional[List[Dict[str, Any]]] = None
+        self._sector_splits: Optional[List[int]] = None
+        self._start_finish: Optional[Dict[str, float]] = None
         self._drivers_meta: Dict[int, Dict[str, Any]] = {}
         self._grid_by_driver: Dict[int, int] = {}
         self._laps_by_driver: Dict[int, List[Dict[str, Any]]] = {}
@@ -242,12 +251,15 @@ class ReplayEngine(BaseStreamProvider):
         self._weather_rows: List[Dict[str, Any]] = []
         self._rc_times: np.ndarray = np.array([], dtype=float)
         self._rc_rows: List[Dict[str, Any]] = []
+        self._radio_times: np.ndarray = np.array([], dtype=float)
+        self._radio_rows: List[Dict[str, Any]] = []
         self._track_timeline: List[Tuple[float, int]] = []
         self._lap_start_times: Dict[int, float] = {}
         self._retired_after: Dict[int, float] = {}
         self._race_context: Optional[RaceContext] = None
 
         self._tyre_deg = TyreDegTracker()
+        self._sector_tracker = SectorAndLapTracker()
         self._cached_pred_lap: int = -1
         self._cached_predictions: Optional[Dict[str, Any]] = None
 
@@ -362,6 +374,10 @@ class ReplayEngine(BaseStreamProvider):
         pits_raw = self.openf1.get_pit(session_key)
         weather_raw = self.openf1.get_weather(session_key)
         rc_raw = self.openf1.get_race_control(session_key)
+        try:
+            team_radio_raw = self.openf1.get("team_radio", {"session_key": session_key})
+        except Exception:  # noqa: BLE001
+            team_radio_raw = []
         result_raw = self.openf1.get_session_result(session_key)
         grid_raw = self.openf1.get_starting_grid(session_key)
 
@@ -422,6 +438,7 @@ class ReplayEngine(BaseStreamProvider):
             pits=pits_raw,
             weather=weather_raw,
             race_control=rc_raw,
+            team_radio=team_radio_raw,
             session_result=result_raw,
             starting_grid=grid_raw,
             locations=loc_raw,
@@ -449,6 +466,7 @@ class ReplayEngine(BaseStreamProvider):
         pits: Sequence[Mapping[str, Any]],
         weather: Sequence[Mapping[str, Any]] = (),
         race_control: Sequence[Mapping[str, Any]] = (),
+        team_radio: Sequence[Mapping[str, Any]] = (),
         session_result: Sequence[Mapping[str, Any]] = (),
         starting_grid: Sequence[Mapping[str, Any]] = (),
         locations: Sequence[Mapping[str, Any]] = (),
@@ -492,6 +510,9 @@ class ReplayEngine(BaseStreamProvider):
                     "lap_number": lno,
                     "start_s": s_ts,
                     "lap_duration": dur,
+                    "s1_s": _float_or_none(row.get("duration_sector_1")),
+                    "s2_s": _float_or_none(row.get("duration_sector_2")),
+                    "s3_s": _float_or_none(row.get("duration_sector_3")),
                     "is_pit_out_lap": bool(row.get("is_pit_out_lap")),
                 }
             )
@@ -654,8 +675,66 @@ class ReplayEngine(BaseStreamProvider):
         self._rc_rows = [p[1] for p in rc_pairs]
         self._track_timeline = track_state_timeline(self._rc_rows)
 
-        # Build rotated track outline
-        self._track_outline = build_track_outline(self._loc_by_driver, self._laps_by_driver, rotation_deg)
+        # Team radio stream
+        radio_pairs: List[Tuple[float, Dict[str, Any]]] = []
+        for row in team_radio or []:
+            dn_r = _int_or_none(row.get("driver_number"))
+            rec_url = str(row.get("recording_url") or "").strip()
+            if dn_r is None or not rec_url or not row.get("date"):
+                continue
+            ts_r = parse_iso_datetime(row["date"]).timestamp()
+            dm_r = self._drivers_meta.get(dn_r) or {}
+            radio_pairs.append(
+                (
+                    ts_r,
+                    {
+                        "date": _epoch_to_iso(ts_r),
+                        "driver_number": dn_r,
+                        "driver_code": dm_r.get("code"),
+                        "team_name": dm_r.get("team_name"),
+                        "team_colour": dm_r.get("team_colour"),
+                        "recording_url": rec_url,
+                    },
+                )
+            )
+        radio_pairs.sort(key=lambda p: p[0])
+        self._radio_times = np.asarray([p[0] for p in radio_pairs], dtype=float)
+        self._radio_rows = [p[1] for p in radio_pairs]
+
+        # Resolve official 2D circuit geometry from circuits_2d.json (fallback to GPS outline)
+        c2d = resolve_circuit_2d(
+            circuit_key=circuit_id,
+            circuit_id=circuit_id,
+            name=circuit_name,
+            grand_prix=grand_prix,
+        )
+        if c2d and c2d.get("points"):
+            self._track_outline = [{"x": float(p["x"]), "y": float(p["y"])} for p in c2d["points"]]
+            self._circuit_slug = c2d.get("slug")
+            self._circuit_corners = [
+                {
+                    "number": int(c["number"]),
+                    "letter": str(c.get("letter") or "") or None,
+                    "x": float(c["x"]),
+                    "y": float(c["y"]),
+                }
+                for c in (c2d.get("corners") or [])
+            ]
+            self._sector_splits = [int(i) for i in (c2d.get("sector_splits") or [])] or None
+            sf = c2d.get("start_finish")
+            self._start_finish = (
+                {"x": float(sf["x"]), "y": float(sf["y"])}
+                if isinstance(sf, dict) and "x" in sf and "y" in sf
+                else None
+            )
+            if rotation_deg is None and c2d.get("rotation_deg") is not None:
+                rotation_deg = float(c2d["rotation_deg"])
+        else:
+            self._track_outline = build_track_outline(self._loc_by_driver, self._laps_by_driver, rotation_deg)
+            self._circuit_slug = None
+            self._circuit_corners = None
+            self._sector_splits = None
+            self._start_finish = None
 
         self._meta = _SessionMeta(
             meeting_key=int(meeting_key),
@@ -681,6 +760,7 @@ class ReplayEngine(BaseStreamProvider):
         self._cached_pred_lap = -1
         self._cached_predictions = None
         self._tyre_deg = TyreDegTracker(total_laps=total_laps)
+        self._sector_tracker = SectorAndLapTracker()
 
         return self.status()
 
@@ -767,6 +847,7 @@ class ReplayEngine(BaseStreamProvider):
             self._cursor_s = self._meta.start_s
             self._finished = False
             self._tyre_deg.reset()
+            self._sector_tracker.reset()
             self._cached_pred_lap = -1
         return self.status()
 
@@ -790,6 +871,7 @@ class ReplayEngine(BaseStreamProvider):
             self._cursor_s = self._meta.start_s + frac * (self._meta.end_s - self._meta.start_s)
         self._finished = False
         self._tyre_deg.reset()
+        self._sector_tracker.reset()
         self._cached_pred_lap = -1
         self._cached_predictions = None
         return self.status()
@@ -953,6 +1035,16 @@ class ReplayEngine(BaseStreamProvider):
             start_idx = max(0, rc_end - config.RACE_CONTROL_TAIL)
             rc_tail = self._rc_rows[start_idx:rc_end]
 
+        # Recent team radio clips up to cur_s (enriched with cached faster-whisper transcripts)
+        radio_tail: List[Dict[str, Any]] = []
+        if self._radio_times.size > 0:
+            r_end = int(np.searchsorted(self._radio_times, cur_s, side="right"))
+            for clip in self._radio_rows[max(0, r_end - 25) : r_end]:
+                row_copy = dict(clip)
+                if self.transcriber is not None:
+                    row_copy["transcript"] = self.transcriber.get_cached(clip["recording_url"])
+                radio_tail.append(row_copy)
+
         gps_available = bool(self._loc_by_driver)
         telemetry_available = bool(self._car_by_driver)
 
@@ -1054,6 +1146,17 @@ class ReplayEngine(BaseStreamProvider):
                         is_pit_in_lap=(lno in pit_in_laps),
                         track_status=lap_flag,
                     )
+                self._sector_tracker.record_lap(
+                    dn,
+                    meta["code"],
+                    lap_number=lno,
+                    lap_time_s=float(dur) if dur is not None and dur > 0 else None,
+                    s1_s=lap.get("s1_s"),
+                    s2_s=lap.get("s2_s"),
+                    s3_s=lap.get("s3_s"),
+                    team_name=meta["team_name"],
+                    team_colour=meta["team_colour"],
+                )
 
             deg_res = self._tyre_deg.get_driver_deg(dn)
             tyre_health = deg_res.tyre_health if deg_res is not None else "UNKNOWN"
@@ -1144,6 +1247,10 @@ class ReplayEngine(BaseStreamProvider):
                 }
             )
 
+        # Attach per-driver sector states after all drivers' laps up to cur_s have been recorded
+        for d in drivers_list:
+            d["sectors"] = self._sector_tracker.driver_sectors_contract(int(d["driver_number"]))
+
         # Sort timing order by running position (retired at bottom)
         drivers_list.sort(
             key=lambda d: (
@@ -1178,6 +1285,8 @@ class ReplayEngine(BaseStreamProvider):
             "weather": weather,
             "drivers": drivers_list,
             "race_control": rc_tail,
+            "team_radio": radio_tail,
+            "session_best": self._sector_tracker.session_best_contract(),
             "predictions": self._cached_predictions,
         }
 
@@ -1199,9 +1308,13 @@ class ReplayEngine(BaseStreamProvider):
             "grand_prix": self._meta.grand_prix,
             "circuit": {
                 "circuit_id": self._meta.circuit_id,
+                "slug": self._circuit_slug,
                 "name": self._meta.circuit_name,
                 "rotation_deg": self._meta.rotation_deg,
                 "track_outline": self._track_outline,
+                "sector_splits": self._sector_splits,
+                "start_finish": self._start_finish,
+                "corners": self._circuit_corners,
             },
             "replay": {
                 "session_start": _epoch_to_iso(self._meta.start_s),

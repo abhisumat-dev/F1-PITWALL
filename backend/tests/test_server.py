@@ -15,6 +15,7 @@ import config
 from clients.jolpica_client import JolpicaClient
 from clients.openf1_client import OpenF1Client
 from ml.predictor import RacePredictor
+from analytics.radio_transcriber import RadioTranscriber
 from server.main import PitWallRuntime, create_app
 from server.schedule import format_multi_timezone, get_next_race_schedule
 from streams.replay_engine import ReplayEngine
@@ -79,6 +80,55 @@ class _StubJolpica(JolpicaClient):
 
     def get_race_results(self, season: int, round_number: int | None = None) -> List[Dict[str, Any]]:
         return []
+
+    def get(self, endpoint: str, params=None, *, season=None, use_cache=True):
+        if "driverStandings" in endpoint:
+            return {
+                "StandingsTable": {
+                    "StandingsLists": [
+                        {
+                            "season": "2026",
+                            "round": "22",
+                            "DriverStandings": [
+                                {
+                                    "position": "1",
+                                    "points": "393",
+                                    "wins": "8",
+                                    "Driver": {"driverId": "verstappen", "code": "VER", "permanentNumber": "1", "givenName": "Max", "familyName": "Verstappen", "nationality": "Dutch"},
+                                    "Constructors": [{"constructorId": "red_bull", "name": "Red Bull Racing"}],
+                                },
+                                {
+                                    "position": "2",
+                                    "points": "356",
+                                    "wins": "5",
+                                    "Driver": {"driverId": "norris", "code": "NOR", "permanentNumber": "4", "givenName": "Lando", "familyName": "Norris", "nationality": "British"},
+                                    "Constructors": [{"constructorId": "mclaren", "name": "McLaren"}],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+        if "constructorStandings" in endpoint:
+            return {
+                "StandingsTable": {
+                    "StandingsLists": [
+                        {
+                            "season": "2026",
+                            "round": "22",
+                            "ConstructorStandings": [
+                                {
+                                    "position": "1",
+                                    "points": "608",
+                                    "wins": "6",
+                                    "Constructor": {"constructorId": "mclaren", "name": "McLaren", "nationality": "British"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        return {}
 
 
 class _StubOpenF1(OpenF1Client):
@@ -180,6 +230,7 @@ def test_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         jolpica=jolpica,
         openf1=openf1,
         predictor=predictor,
+        transcriber=RadioTranscriber(cache_path=tmp_path / "radio_transcripts.json"),
         replay=replay,
         live=live,
         initial_mode="replay",
@@ -239,6 +290,39 @@ def test_api_health_sessions_next_race_and_cors(test_client: TestClient) -> None
     nr = nr_res.json()
     assert nr["grand_prix"] == "Qatar Grand Prix"
     assert {"ist", "uk", "us_eastern", "us_central", "us_pacific"} <= set(nr["times"].keys())
+
+    # Pre-race standings endpoint returns WDC, WCC, and latest qualifying grid
+    st_res = test_client.get("/api/standings?season=2026")
+    assert st_res.status_code == 200
+    st = st_res.json()
+    assert st["season"] == 2026
+    assert st["drivers"][0]["driver_code"] == "VER"
+    assert st["constructors"][0]["team_name"] == "McLaren"
+    assert st["latest_qualifying"]["grand_prix"] == "Qatar Grand Prix"
+
+    # Real 2D F1 circuits catalog endpoints
+    c_list = test_client.get("/api/circuits")
+    assert c_list.status_code == 200
+    assert c_list.json()["count"] >= 24
+
+    c_lv = test_client.get("/api/circuits/las_vegas")
+    assert c_lv.status_code == 200
+    lv = c_lv.json()
+    assert lv["slug"] == "las_vegas"
+    assert len(lv["points"]) == 260
+    assert len(lv["corners"]) == 17
+    assert len(lv["sector_splits"]) == 4
+
+    # Team radio transcriber rejects disallowed URLs (SSRF guard) & serves cached transcripts
+    bad_radio = test_client.get("/api/radio/transcribe?url=http://127.0.0.1/secret")
+    assert bad_radio.status_code == 400
+    rt = test_client.app.state.runtime
+    sample_url = "https://livetiming.formula1.com/static/2026/radio_ver_test.mp3"
+    rt.transcriber.put_cached(sample_url, "Box this lap, tyres are dropping in Sector 2.")
+    ok_radio = test_client.get(f"/api/radio/transcribe?url={sample_url}")
+    assert ok_radio.status_code == 200
+    assert ok_radio.json()["cached"] is True
+    assert "Box this lap" in ok_radio.json()["transcript"]
 
 
 def test_post_quali_control_mode_switch_and_websocket(

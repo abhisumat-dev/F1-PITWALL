@@ -1,0 +1,22 @@
+{
+  "name": "F1 Pit-Wall — Live Telemetry & Race Strategy",
+  "short_name": "F1 Pit-Wall",
+  "description": "Formula 1 live timing, 22-car tyre stint timeline, real 2D circuit telemetry, FIA & Team Radio with Whisper transcripts, and post-qualifying Top-3 predictions.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07090D",
+  "theme_color": "#0B0E14",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

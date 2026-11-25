@@ -42,10 +42,13 @@ import httpx
 import websockets
 
 import config
+from analytics.radio_transcriber import RadioTranscriber
+from analytics.sectors_fastest import SectorAndLapTracker
 from analytics.tyre_deg import TyreDegTracker
 from clients.jolpica_client import parse_lap_time
 from ml.features import normalize_podium_to_percent, normalize_to_percent
 from ml.predictor import RaceContext, RacePredictor, is_driver_out
+from server.circuits import resolve_circuit_2d
 from streams.base_provider import BaseStreamProvider
 
 LOGGER = logging.getLogger(__name__)
@@ -209,10 +212,12 @@ class SignalRStateStore:
         self.driver_list: Dict[str, Any] = {}
         self.timing_data: Dict[str, Any] = {}
         self.timing_app_data: Dict[str, Any] = {}
+        self.timing_stats: Dict[str, Any] = {}
         self.lap_count: Dict[str, Any] = {}
         self.weather_data: Dict[str, Any] = {}
         self.track_status: Dict[str, Any] = {}
         self.race_control: Dict[str, Any] = {"Messages": []}
+        self.team_radio: Dict[str, Any] = {"Captures": []}
         self.car_data: Dict[str, Any] = {}
         self.position: Dict[str, Any] = {}
 
@@ -221,8 +226,10 @@ class SignalRStateStore:
     def _reset_session_scoped(self) -> None:
         self.timing_data = {}
         self.timing_app_data = {}
+        self.timing_stats = {}
         self.lap_count = {}
         self.race_control = {"Messages": []}
+        self.team_radio = {"Captures": []}
         self.car_data = {}
         self.position = {}
 
@@ -244,6 +251,8 @@ class SignalRStateStore:
             self.timing_data = deep_merge(self.timing_data, data)
         elif topic == "TimingAppData":
             self.timing_app_data = deep_merge(self.timing_app_data, data)
+        elif topic == "TimingStats":
+            self.timing_stats = deep_merge(self.timing_stats, data)
         elif topic == "LapCount":
             self.lap_count = deep_merge(self.lap_count, data)
         elif topic == "WeatherData":
@@ -268,6 +277,20 @@ class SignalRStateStore:
                         if isinstance(msg, dict):
                             existing.append(msg)
                 self.race_control = {"Messages": existing[-100:]}
+        elif topic == "TeamRadio":
+            if isinstance(data, dict) and "Captures" in data:
+                existing_caps = list(self.team_radio.get("Captures") or [])
+                patch_caps = data["Captures"]
+                if isinstance(patch_caps, list):
+                    existing_caps.extend(patch_caps)
+                elif isinstance(patch_caps, dict):
+                    for _, cap in sorted(
+                        patch_caps.items(),
+                        key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0,
+                    ):
+                        if isinstance(cap, dict):
+                            existing_caps.append(cap)
+                self.team_radio = {"Captures": existing_caps[-50:]}
 
         now = time.monotonic()
         if now - self._last_persist_at >= self.persist_interval_s:
@@ -282,10 +305,12 @@ class SignalRStateStore:
             "drivers": self.driver_list,
             "timing": self.timing_data,
             "timing_app": self.timing_app_data,
+            "timing_stats": self.timing_stats,
             "lap_count": self.lap_count,
             "weather": self.weather_data,
             "track_status": self.track_status,
             "race_control": self.race_control,
+            "team_radio": self.team_radio,
         }
 
     def save_atomic(self) -> None:
@@ -312,10 +337,12 @@ class SignalRStateStore:
             self.driver_list = saved.get("drivers") or {}
             self.timing_data = saved.get("timing") or {}
             self.timing_app_data = saved.get("timing_app") or {}
+            self.timing_stats = saved.get("timing_stats") or {}
             self.lap_count = saved.get("lap_count") or {}
             self.weather_data = saved.get("weather") or {}
             self.track_status = saved.get("track_status") or {}
             self.race_control = saved.get("race_control") or {"Messages": []}
+            self.team_radio = saved.get("team_radio") or {"Captures": []}
             self.last_update = saved.get("last_update")
             LOGGER.info("Restored SignalR crash-recovery state from %s", self.state_path)
             return True
@@ -333,9 +360,11 @@ class SignalRLiveProvider(BaseStreamProvider):
     FREE_TOPICS: Tuple[str, ...] = (
         "TimingData",
         "TimingAppData",
+        "TimingStats",
         "LapCount",
         "WeatherData",
         "RaceControlMessages",
+        "TeamRadio",
         "DriverList",
         "TrackStatus",
         "SessionInfo",
@@ -346,6 +375,7 @@ class SignalRLiveProvider(BaseStreamProvider):
         self,
         *,
         predictor: Optional[RacePredictor] = None,
+        transcriber: Optional[RadioTranscriber] = None,
         state_path: Path = DEFAULT_LAST_STATE_PATH,
         live_token: Optional[str] = None,
         negotiate_url: str = config.SIGNALR_NEGOTIATE_URL,
@@ -354,6 +384,7 @@ class SignalRLiveProvider(BaseStreamProvider):
     ) -> None:
         super().__init__(mode="free_live")
         self.predictor = predictor
+        self.transcriber = transcriber
         self.live_token = (live_token if live_token is not None else config.F1_LIVE_TOKEN).strip()
         self.negotiate_url = negotiate_url.rstrip("/")
         self.ws_base_url = ws_base_url.rstrip("/")
@@ -361,6 +392,7 @@ class SignalRLiveProvider(BaseStreamProvider):
 
         self.store = SignalRStateStore(state_path=state_path)
         self._tyre_deg = TyreDegTracker()
+        self._sector_tracker = SectorAndLapTracker()
         self._driver_last_lap_seen: Dict[int, int] = {}
         self._driver_pit_counts: Dict[int, int] = {}
         self._driver_pit_history: Dict[int, List[Dict[str, Any]]] = {}
@@ -524,6 +556,41 @@ class SignalRLiveProvider(BaseStreamProvider):
         timing_lines = (self.store.timing_data or {}).get("Lines") or {}
         app_lines = (self.store.timing_app_data or {}).get("Lines") or {}
 
+        # Team radio clips from free TeamRadio SignalR topic
+        raw_caps = self.store.team_radio.get("Captures") or []
+        if isinstance(raw_caps, dict):
+            raw_caps = list(normalise_arrays(raw_caps))
+        sess_path = str(session.get("Path") or "").strip("/")
+        radio_clips: List[Dict[str, Any]] = []
+        for cap in raw_caps[-25:]:
+            if not isinstance(cap, dict):
+                continue
+            rn = _int_or_none(cap.get("RacingNumber") or cap.get("driver_number"))
+            raw_path = str(cap.get("recording_url") or cap.get("Path") or "").strip()
+            if rn is None or not raw_path:
+                continue
+            if raw_path.startswith("http://") or raw_path.startswith("https://"):
+                rec_url = raw_path
+            elif sess_path:
+                rec_url = f"https://livetiming.formula1.com/static/{sess_path}/{raw_path.lstrip('/')}"
+            else:
+                rec_url = f"https://livetiming.formula1.com/static/{raw_path.lstrip('/')}"
+            utc_r = str(cap.get("Utc") or cap.get("date") or _now_iso())
+            if not utc_r.endswith("Z") and "+" not in utc_r[10:]:
+                utc_r += "Z"
+            d_meta = driver_list.get(str(rn)) or {}
+            radio_clips.append(
+                {
+                    "date": utc_r,
+                    "driver_number": rn,
+                    "driver_code": str(d_meta.get("Tla") or rn),
+                    "team_name": d_meta.get("TeamName"),
+                    "team_colour": _normalize_hex(d_meta.get("TeamColour")),
+                    "recording_url": rec_url,
+                    "transcript": self.transcriber.get_cached(rec_url) if self.transcriber else None,
+                }
+            )
+
         all_nums = sorted(
             {str(k) for k in driver_list.keys() if re.fullmatch(r"\d+", str(k))}
             | {str(k) for k in timing_lines.keys() if re.fullmatch(r"\d+", str(k))},
@@ -562,7 +629,36 @@ class SignalRLiveProvider(BaseStreamProvider):
             best_lap_s = parse_lap_time(
                 best_lap_obj.get("Value") if isinstance(best_lap_obj, dict) else best_lap_obj
             )
+            best_lap_num = _int_or_none(best_lap_obj.get("Lap")) if isinstance(best_lap_obj, dict) else None
             num_laps = _int_or_none(td.get("NumberOfLaps")) or lap_current
+
+            # Parse S1, S2, S3 from TimingData Sectors
+            raw_sectors = td.get("Sectors")
+            sec_list = normalise_arrays(raw_sectors) if isinstance(raw_sectors, dict) else raw_sectors
+            s1_val: Optional[float] = None
+            s2_val: Optional[float] = None
+            s3_val: Optional[float] = None
+            if isinstance(sec_list, list):
+                if len(sec_list) > 0 and isinstance(sec_list[0], dict):
+                    s1_val = _float_or_none(sec_list[0].get("Value"))
+                if len(sec_list) > 1 and isinstance(sec_list[1], dict):
+                    s2_val = _float_or_none(sec_list[1].get("Value"))
+                if len(sec_list) > 2 and isinstance(sec_list[2], dict):
+                    s3_val = _float_or_none(sec_list[2].get("Value"))
+            d_code = str(d_info.get("Tla") or dn)
+            d_team = str(d_info.get("TeamName") or "Unknown Team")
+            d_hex = _normalize_hex(d_info.get("TeamColour"))
+            self._sector_tracker.update_live_sectors(
+                dn,
+                d_code,
+                s1_s=s1_val,
+                s2_s=s2_val,
+                s3_s=s3_val,
+                best_lap_s=best_lap_s,
+                best_lap_number=best_lap_num or num_laps,
+                team_name=d_team,
+                team_colour=d_hex,
+            )
 
             # Track pit stops from NumberOfPitStops counter
             pit_total = _int_or_none(td.get("NumberOfPitStops")) or 0
@@ -689,6 +785,9 @@ class SignalRLiveProvider(BaseStreamProvider):
                 }
             )
 
+        for d in drivers_out:
+            d["sectors"] = self._sector_tracker.driver_sectors_contract(int(d["driver_number"]))
+
         drivers_out.sort(
             key=lambda d: (
                 1 if d["retired"] else 0,
@@ -715,6 +814,42 @@ class SignalRLiveProvider(BaseStreamProvider):
         if len(start_date) >= 4 and start_date[:4].isdigit():
             season_year = int(start_date[:4])
 
+        gp_name = str(meeting.get("Name") or session.get("Name") or "Live F1 Session")
+        c_key = circuit_obj.get("Key")
+        c_short = str(circuit_obj.get("ShortName") or meeting.get("Location") or "Live Circuit")
+        c2d = resolve_circuit_2d(
+            circuit_key=c_key,
+            circuit_id=str(c_key) if c_key is not None else None,
+            name=c_short,
+            grand_prix=gp_name,
+        )
+        circuit_block: Dict[str, Any] = {
+            "circuit_id": str(c_key) if c_key is not None else (c2d.get("slug") if c2d else None),
+            "slug": c2d.get("slug") if c2d else None,
+            "name": c_short,
+            "rotation_deg": float(c2d["rotation_deg"]) if c2d and c2d.get("rotation_deg") is not None else None,
+            "track_outline": [{"x": float(p["x"]), "y": float(p["y"])} for p in c2d["points"]] if c2d and c2d.get("points") else None,
+            "sector_splits": [int(i) for i in (c2d.get("sector_splits") or [])] if c2d and c2d.get("sector_splits") else None,
+            "start_finish": (
+                {"x": float(c2d["start_finish"]["x"]), "y": float(c2d["start_finish"]["y"])}
+                if c2d and isinstance(c2d.get("start_finish"), dict)
+                else None
+            ),
+            "corners": (
+                [
+                    {
+                        "number": int(c["number"]),
+                        "letter": str(c.get("letter") or "") or None,
+                        "x": float(c["x"]),
+                        "y": float(c["y"]),
+                    }
+                    for c in (c2d.get("corners") or [])
+                ]
+                if c2d and c2d.get("corners")
+                else None
+            ),
+        }
+
         race_state = {
             "lap_current": lap_current,
             "lap_total": lap_total,
@@ -722,6 +857,8 @@ class SignalRLiveProvider(BaseStreamProvider):
             "weather": weather,
             "drivers": drivers_out,
             "race_control": rc_messages,
+            "team_radio": radio_clips,
+            "session_best": self._sector_tracker.session_best_contract(),
             "predictions": predictions,
         }
 
@@ -741,13 +878,8 @@ class SignalRLiveProvider(BaseStreamProvider):
             "session_key": _int_or_none(session.get("Key")),
             "season": season_year,
             "round": _int_or_none(meeting.get("Number")),
-            "grand_prix": str(meeting.get("Name") or session.get("Name") or "Live F1 Session"),
-            "circuit": {
-                "circuit_id": str(circuit_obj["Key"]) if circuit_obj.get("Key") is not None else None,
-                "name": str(circuit_obj.get("ShortName") or meeting.get("Location") or "Live Circuit"),
-                "rotation_deg": None,
-                "track_outline": None,
-            },
+            "grand_prix": gp_name,
+            "circuit": circuit_block,
             "race": race_state,
             "tick": race_state,
         }
