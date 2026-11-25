@@ -72,11 +72,14 @@ PROJECT_ROOT: Path = BACKEND_DIR.parent
 CONTRACT_PATH: Path = PROJECT_ROOT / "contract" / "live_packet.json"
 SCHEMA_VERSION: str = "1.0"
 
-CACHE_DIR: Path = Path(_env_str("F1_CACHE_DIR", str(BACKEND_DIR / "cache")))
+_DEFAULT_CACHE_BASE = Path("/tmp/f1_pitwall/cache") if os.environ.get("VERCEL") else (BACKEND_DIR / "cache")
+_DEFAULT_DATA_BASE = Path("/tmp/f1_pitwall/data") if os.environ.get("VERCEL") else (BACKEND_DIR / "data")
+
+CACHE_DIR: Path = Path(_env_str("F1_CACHE_DIR", str(_DEFAULT_CACHE_BASE)))
 JOLPICA_CACHE_DIR: Path = CACHE_DIR / "jolpica"
 OPENF1_CACHE_DIR: Path = CACHE_DIR / "openf1"
 
-DATA_DIR: Path = Path(_env_str("F1_DATA_DIR", str(BACKEND_DIR / "data")))
+DATA_DIR: Path = Path(_env_str("F1_DATA_DIR", str(_DEFAULT_DATA_BASE)))
 PRE_RACE_RAW_PATH: Path = DATA_DIR / "pre_race_raw.parquet"
 IN_RACE_RAW_PATH: Path = DATA_DIR / "in_race_raw.parquet"
 
