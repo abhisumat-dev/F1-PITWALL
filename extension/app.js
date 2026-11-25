@@ -1596,6 +1596,9 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    if ("serviceWorker" in navigator && /^https?:$/i.test(window.location.protocol)) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
     bindWindowControls();
     if (state.page === "live") initLivePage();
     else if (state.page === "predictions") initPredictionsPage();
