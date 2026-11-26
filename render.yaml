@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: f1-pitwall-live-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: F1_CORS_ORIGINS
+        value: "https://f1-pitwall-steel.vercel.app"
+      - key: F1_LIVE_TOKEN
+        sync: false

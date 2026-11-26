@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -399,10 +400,13 @@ class PitWallRuntime:
         return packet
 
     def health(self) -> Dict[str, Any]:
+        is_serverless = bool(os.environ.get("VERCEL"))
         return {
             "status": "ok",
             "schema_version": config.SCHEMA_VERSION,
             "server_time_utc": _now_iso(),
+            "serverless": is_serverless,
+            "ws_supported": not is_serverless,
             "mode": self.mode,
             "ws_clients": len(self._clients),
             "active_provider": self.active_provider.status(),
@@ -437,17 +441,24 @@ def create_app(
     )
     app.state.runtime = rt
 
-    # CORS for Chrome Side Panel extension, localhost dev, and mobile LAN PWA
+    # CORS for Chrome Side Panel extension, Vercel hybrid UI, localhost dev, and mobile LAN PWA
+    default_origins = [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "https://f1-pitwall-steel.vercel.app",
+        *config.CORS_EXTRA_ORIGINS,
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:8000",
-            "http://127.0.0.1:8000",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:5173",
-        ],
-        allow_origin_regex=r"^(chrome-extension://.*|https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?)$",
+        allow_origins=list(dict.fromkeys(default_origins)),
+        allow_origin_regex=(
+            r"^(chrome-extension://.*"
+            r"|https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?"
+            r"|https://[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.(vercel\.app|onrender\.com|up\.railway\.app|fly\.dev))$"
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -71,11 +71,19 @@
       </div>
       <div class="popover-body">
         <div class="field-group">
-          <label class="field-label" for="api-host-input">Backend Server URL (LAN / Localhost)</label>
-          <div class="inline-field">
-            <input type="url" id="api-host-input" class="ctrl-input" placeholder="http://localhost:8000" autocapitalize="none" autocorrect="off" />
-            <button type="button" id="btn-save-host" class="btn-primary-sm">Save</button>
+          <div class="field-label-row">
+            <label class="field-label" for="api-host-input">Backend Server URL</label>
+            <button type="button" id="btn-reset-host" class="link-reset-btn">Reset to Default</button>
           </div>
+          <div class="inline-field">
+            <input type="url" id="api-host-input" class="ctrl-input" placeholder="https://your-live-backend.onrender.com" autocapitalize="none" autocorrect="off" />
+            <button type="button" id="btn-save-host" class="btn-primary-sm">Test &amp; Save</button>
+          </div>
+          <p class="field-hint">Paste a Render, Railway, Docker, or LAN backend URL for live 4 Hz WebSockets &amp; radio transcription.</p>
+        </div>
+        <div class="popover-footer-status">
+          <span id="api-health-dot" class="conn-dot" aria-hidden="true"></span>
+          <span id="api-health-status" class="mono-muted">Checking server...</span>
         </div>
       </div>
     </div>

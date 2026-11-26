@@ -55,7 +55,23 @@ python -m uvicorn backend.server.main:app --host 0.0.0.0 --port 8000
 
 Open **`http://localhost:8000/`** in any desktop or mobile browser (or click **Install F1 Pit-Wall** in Chrome/Edge's address bar to install it as a standalone chromeless desktop app).
 
-### 2. Load the Chrome Extension (Resizable Floating Window + Side Panel)
+### 2. Hybrid Cloud Deployment (Vercel Frontend + Persistent Live Backend)
+
+F1 Pit-Wall supports a **hybrid deployment** so your web app and PWA run globally on **Vercel** (`https://f1-pitwall-steel.vercel.app/`), while live `4 Hz` SignalR WebSocket streaming (`/ws/live`) and `faster-whisper` Team Radio speech-to-text run on a persistent container (`Render`, `Railway`, `Fly.io`, or local Docker):
+
+1. **Deploy the Persistent Live Backend** using the included [`Dockerfile`](Dockerfile), [`render.yaml`](render.yaml), or [`railway.json`](railway.json):
+   - **Render (Free Docker Web Service):** In Render → **New +** → **Blueprint** → select `abhisumat-dev/F1-PITWALL` (`render.yaml` auto-configures `/api/health` and CORS for `https://f1-pitwall-steel.vercel.app`).
+   - **Railway:** **New Project** → **Deploy from GitHub repo** (`railway.json` builds [`Dockerfile`](Dockerfile) automatically).
+   - **Local Docker:**
+     ```powershell
+     docker build -t f1-pitwall-live .
+     docker run -p 8000:8000 f1-pitwall-live
+     ```
+2. **Connect Vercel UI or Chrome Extension to Your Live Backend:**
+   - Open **`https://f1-pitwall-steel.vercel.app/`** (or the Chrome Extension) → click **`⚙` Settings** (top-right) → paste your backend URL (e.g. `https://f1-pitwall-live-backend.onrender.com` or `http://localhost:8000`) → click **Test & Save**.
+   - Or share a one-click auto-configured link: `https://f1-pitwall-steel.vercel.app/?api=https://your-backend.onrender.com`.
+
+### 3. Load the Chrome Extension (Resizable Floating Window + Side Panel)
 
 1. Open Chrome and navigate to `chrome://extensions`.
 2. Enable **Developer mode** (top-right toggle).

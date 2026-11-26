@@ -72,8 +72,13 @@ def test_blackbox_ssrf_and_cors_security(bb_client: TestClient) -> None:
         resp = bb_client.get("/api/radio/transcribe", params={"url": bad})
         assert resp.status_code == 400
 
-    # CORS preflight for Chrome Extension & LAN mobile PWA
-    for origin in ("chrome-extension://f1pitwallid", "http://192.168.1.42:8000"):
+    # CORS preflight for Chrome Extension, LAN mobile PWA, and Hybrid Vercel UI
+    for origin in (
+        "chrome-extension://f1pitwallid",
+        "http://192.168.1.42:8000",
+        "https://f1-pitwall-steel.vercel.app",
+        "https://f1-pitwall-preview-abc123.vercel.app",
+    ):
         preflight = bb_client.options(
             "/api/health",
             headers={"Origin": origin, "Access-Control-Request-Method": "GET"},

@@ -39,13 +39,25 @@
 
   const $ = (id) => document.getElementById(id);
 
-  function resolveApiBase() {
-    const saved = (localStorage.getItem(STORAGE_KEY_HOST) || "").trim().replace(/\/+$/, "");
-    if (saved) return saved;
+  function defaultApiBase() {
     if (window.location.protocol === "chrome-extension:" || window.location.protocol === "file:") {
       return "http://localhost:8000";
     }
     return window.location.origin;
+  }
+
+  function resolveApiBase() {
+    try {
+      const qApi = new URLSearchParams(window.location.search).get("api");
+      if (qApi && /^https?:\/\/.+/i.test(qApi.trim())) {
+        const cleaned = qApi.trim().replace(/\/+$/, "");
+        localStorage.setItem(STORAGE_KEY_HOST, cleaned);
+        return cleaned;
+      }
+    } catch (_) {}
+    const saved = (localStorage.getItem(STORAGE_KEY_HOST) || "").trim().replace(/\/+$/, "");
+    if (saved) return saved;
+    return defaultApiBase();
   }
 
   function toWsUrl(httpBase) {
@@ -193,14 +205,54 @@
     nextRaceCache: null,
   };
 
+  async function probeBackendHealth(baseUrl) {
+    const dot = $("api-health-dot");
+    const statusLabel = $("api-health-status") || $("ws-conn-status");
+    if (dot) dot.className = "conn-dot";
+    if (statusLabel) statusLabel.textContent = `Checking ${baseUrl}...`;
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 6000) : null;
+    try {
+      const r = await fetch(`${baseUrl}/api/health`, ctrl ? { signal: ctrl.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const h = await r.json();
+      let isVercelHost = false;
+      try { isVercelHost = /\.vercel\.app$/i.test(new URL(baseUrl).hostname); } catch (_) {}
+      const serverless = Boolean((h && h.serverless) || isVercelHost);
+      const wsReady = (h ? h.ws_supported !== false : true) && !serverless;
+      state.backendServerless = serverless;
+      state.backendWsSupported = wsReady;
+      if (dot) dot.className = wsReady ? "conn-dot is-ok" : "conn-dot is-serverless";
+      if (statusLabel) {
+        statusLabel.textContent = wsReady
+          ? `Connected · Live WS + Whisper Ready (${baseUrl.replace(/^https?:\/\//, "")})`
+          : `Serverless REST + ML · Add Live URL for 4 Hz WS`;
+      }
+      return { ok: true, serverless, wsReady, health: h };
+    } catch (_) {
+      if (timer) clearTimeout(timer);
+      if (dot) dot.className = "conn-dot is-err";
+      if (statusLabel) statusLabel.textContent = `Unreachable · Check URL & server status`;
+      return { ok: false, serverless: false, wsReady: false, health: null };
+    }
+  }
+
   function bindSettingsPopover(onHostSaved) {
     const pop = $("settings-popover");
     const btnSet = $("btn-settings");
     if (!pop || !btnSet) return;
 
+    const hostInput = $("api-host-input");
+    if (hostInput) hostInput.value = state.apiBase;
+
     btnSet.addEventListener("click", () => {
       const hidden = pop.classList.toggle("hidden");
       btnSet.setAttribute("aria-expanded", hidden ? "false" : "true");
+      if (!hidden) {
+        if (hostInput) hostInput.value = state.apiBase;
+        probeBackendHealth(state.apiBase);
+      }
     });
     const closeBtn = $("btn-close-settings");
     if (closeBtn) {
@@ -209,22 +261,58 @@
         btnSet.setAttribute("aria-expanded", "false");
       });
     }
-    const hostInput = $("api-host-input");
-    if (hostInput) hostInput.value = state.apiBase;
+
+    const applyHostChange = async (rawValue) => {
+      const v = String(rawValue || "").trim().replace(/\/+$/, "");
+      if (v) {
+        localStorage.setItem(STORAGE_KEY_HOST, v);
+        state.apiBase = v;
+      } else {
+        localStorage.removeItem(STORAGE_KEY_HOST);
+        state.apiBase = resolveApiBase();
+      }
+      if (hostInput) hostInput.value = state.apiBase;
+      state.nextRaceCache = null;
+      const res = await probeBackendHealth(state.apiBase);
+      if (res.ok) {
+        setTimeout(() => {
+          pop.classList.add("hidden");
+          btnSet.setAttribute("aria-expanded", "false");
+        }, 450);
+      }
+      if (onHostSaved) onHostSaved(res);
+    };
 
     const saveBtn = $("btn-save-host");
     if (saveBtn && hostInput) {
-      saveBtn.addEventListener("click", () => {
-        const v = hostInput.value.trim().replace(/\/+$/, "");
-        if (v) {
-          localStorage.setItem(STORAGE_KEY_HOST, v);
-          state.apiBase = v;
-        } else {
-          localStorage.removeItem(STORAGE_KEY_HOST);
-          state.apiBase = resolveApiBase();
+      saveBtn.addEventListener("click", async () => {
+        saveBtn.disabled = true;
+        const origText = saveBtn.textContent;
+        saveBtn.textContent = "Testing...";
+        try {
+          await applyHostChange(hostInput.value);
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = origText;
         }
-        pop.classList.add("hidden");
-        if (onHostSaved) onHostSaved();
+      });
+      hostInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          saveBtn.click();
+        }
+      });
+    }
+
+    const resetBtn = $("btn-reset-host");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", async () => {
+        localStorage.removeItem(STORAGE_KEY_HOST);
+        state.apiBase = defaultApiBase();
+        if (hostInput) hostInput.value = state.apiBase;
+        state.nextRaceCache = null;
+        const res = await probeBackendHealth(state.apiBase);
+        if (onHostSaved) onHostSaved(res);
       });
     }
 
@@ -241,7 +329,10 @@
     }
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") pop.classList.add("hidden");
+      if (e.key === "Escape") {
+        pop.classList.add("hidden");
+        btnSet.setAttribute("aria-expanded", "false");
+      }
     });
   }
 
@@ -1230,15 +1321,32 @@
       $("ws-conn-status").textContent = "Standby (Past Race Results)";
     };
 
-    const connectLiveWs = () => {
+    const connectLiveWs = async () => {
       disconnectWs();
+      const probe = await probeBackendHealth(state.apiBase);
+      if (state.viewMode !== "live") return;
+      if (probe.serverless || !probe.wsReady) {
+        if (probe.serverless) {
+          $("ws-conn-status").textContent = "Serverless Mode · Paste Live Server URL above for 4 Hz Stream";
+          $("live-stream-meta").textContent = "Serverless Mode · Connect Live URL in Settings";
+          if ($("live-badge-text")) $("live-badge-text").textContent = "CONNECT LIVE BACKEND IN SETTINGS";
+        } else {
+          $("ws-conn-status").textContent = "Backend unreachable · Retrying...";
+          $("live-stream-meta").textContent = "Waiting for Live Backend...";
+          clearTimeout(state.wsReconnectTimer);
+          state.wsReconnectTimer = setTimeout(connectLiveWs, 4000);
+        }
+        return;
+      }
+
       const url = toWsUrl(state.apiBase);
       $("ws-conn-status").textContent = `Connecting to ${url}...`;
       $("live-stream-meta").textContent = "Connecting to Live Feed...";
       const ws = new WebSocket(url);
       state.ws = ws;
       ws.onopen = () => {
-        $("ws-conn-status").textContent = `Live Connected · ${state.apiBase}`;
+        if ($("api-health-dot")) $("api-health-dot").className = "conn-dot is-ok";
+        $("ws-conn-status").textContent = `Live Connected · ${state.apiBase.replace(/^https?:\/\//, "")}`;
         $("live-stream-meta").textContent = "Live Stream Connected";
       };
       ws.onmessage = (evt) => {
@@ -1257,7 +1365,7 @@
         $("ws-conn-status").textContent = "Reconnecting...";
         $("live-stream-meta").textContent = "Reconnecting...";
         clearTimeout(state.wsReconnectTimer);
-        state.wsReconnectTimer = setTimeout(connectLiveWs, 2500);
+        state.wsReconnectTimer = setTimeout(connectLiveWs, 3000);
       };
     };
 

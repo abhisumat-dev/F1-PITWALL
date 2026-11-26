@@ -5,7 +5,7 @@
  * window) with offline shell caching for fonts, icons, and 2D circuit geometry,
  * while keeping all `/api/*` and HTML requests strictly network-first.
  */
-const CACHE_NAME = "f1-pitwall-shell-v1";
+const CACHE_NAME = "f1-pitwall-shell-v2";
 const PRECACHE_ASSETS = [
   "/",
   "/index.html",

@@ -172,7 +172,12 @@ FUEL_EFFECT_S_PER_KG: float = _env_float("F1_FUEL_EFFECT_S_PER_KG", 0.035)
 # Server / replay (Stage 2 + 3)
 # --------------------------------------------------------------------------- #
 SERVER_HOST: str = _env_str("F1_SERVER_HOST", "0.0.0.0")
-SERVER_PORT: int = _env_int("F1_SERVER_PORT", 8000)
+SERVER_PORT: int = _env_int("F1_SERVER_PORT", _env_int("PORT", 8000))
+CORS_EXTRA_ORIGINS: Tuple[str, ...] = tuple(
+    origin.strip().rstrip("/")
+    for origin in _env_str("F1_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+)
 REPLAY_DEFAULT_SPEED: float = _env_float("F1_REPLAY_SPEED", 1.0)
 REPLAY_TICK_S: float = _env_float("F1_REPLAY_TICK_S", 0.25)
 RACE_CONTROL_TAIL: int = _env_int("F1_RACE_CONTROL_TAIL", 15)
