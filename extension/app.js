@@ -11,6 +11,7 @@
 
   const STORAGE_KEY_HOST = "f1_pitwall_api_host";
   const STORAGE_KEY_DELAY = "f1_pitwall_sync_delay_s";
+  const DEFAULT_LIVE_BACKEND = "https://f1-pitwall-live-backend.onrender.com";
 
   const COMPOUND_META = {
     SOFT: { letter: "S", color: "#EF4444", text: "#FFFFFF" },
@@ -58,6 +59,15 @@
     const saved = (localStorage.getItem(STORAGE_KEY_HOST) || "").trim().replace(/\/+$/, "");
     if (saved) return saved;
     return defaultApiBase();
+  }
+
+  function resolveLiveBase() {
+    const saved = (localStorage.getItem(STORAGE_KEY_HOST) || "").trim().replace(/\/+$/, "");
+    if (saved) return saved;
+    if (/\.vercel\.app$/i.test(window.location.hostname || "")) {
+      return DEFAULT_LIVE_BACKEND;
+    }
+    return resolveApiBase();
   }
 
   function toWsUrl(httpBase) {
@@ -187,6 +197,7 @@
   const state = {
     page: document.body.dataset.page || "standings",
     apiBase: resolveApiBase(),
+    liveBase: resolveLiveBase(),
     viewMode: "results", // "results" (final standings after final lap) | "live" (live race feed)
     syncDelayS: Number(localStorage.getItem(STORAGE_KEY_DELAY) || 0),
     delayBuffer: [],
@@ -211,7 +222,7 @@
     if (dot) dot.className = "conn-dot";
     if (statusLabel) statusLabel.textContent = `Checking ${baseUrl}...`;
     const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-    const timer = ctrl ? setTimeout(() => ctrl.abort(), 6000) : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 25000) : null;
     try {
       const r = await fetch(`${baseUrl}/api/health`, ctrl ? { signal: ctrl.signal } : undefined);
       if (timer) clearTimeout(timer);
@@ -244,14 +255,14 @@
     if (!pop || !btnSet) return;
 
     const hostInput = $("api-host-input");
-    if (hostInput) hostInput.value = state.apiBase;
+    if (hostInput) hostInput.value = state.liveBase;
 
     btnSet.addEventListener("click", () => {
       const hidden = pop.classList.toggle("hidden");
       btnSet.setAttribute("aria-expanded", hidden ? "false" : "true");
       if (!hidden) {
-        if (hostInput) hostInput.value = state.apiBase;
-        probeBackendHealth(state.apiBase);
+        if (hostInput) hostInput.value = state.liveBase;
+        probeBackendHealth(state.liveBase);
       }
     });
     const closeBtn = $("btn-close-settings");
@@ -267,13 +278,15 @@
       if (v) {
         localStorage.setItem(STORAGE_KEY_HOST, v);
         state.apiBase = v;
+        state.liveBase = v;
       } else {
         localStorage.removeItem(STORAGE_KEY_HOST);
         state.apiBase = resolveApiBase();
+        state.liveBase = resolveLiveBase();
       }
-      if (hostInput) hostInput.value = state.apiBase;
+      if (hostInput) hostInput.value = state.liveBase;
       state.nextRaceCache = null;
-      const res = await probeBackendHealth(state.apiBase);
+      const res = await probeBackendHealth(state.liveBase);
       if (res.ok) {
         setTimeout(() => {
           pop.classList.add("hidden");
@@ -309,9 +322,10 @@
       resetBtn.addEventListener("click", async () => {
         localStorage.removeItem(STORAGE_KEY_HOST);
         state.apiBase = defaultApiBase();
-        if (hostInput) hostInput.value = state.apiBase;
+        state.liveBase = resolveLiveBase();
+        if (hostInput) hostInput.value = state.liveBase;
         state.nextRaceCache = null;
-        const res = await probeBackendHealth(state.apiBase);
+        const res = await probeBackendHealth(state.liveBase);
         if (onHostSaved) onHostSaved(res);
       });
     }
@@ -675,7 +689,7 @@
     const requestWhisper = async (url) => {
       state.transcribingUrls.add(url);
       try {
-        const res = await fetch(`${state.apiBase}/api/radio/transcribe?url=${encodeURIComponent(url)}`);
+        const res = await fetch(`${state.liveBase}/api/radio/transcribe?url=${encodeURIComponent(url)}`);
         if (res.ok) {
           const data = await res.json();
           state.transcripts.set(url, (data && data.transcript) ? data.transcript.trim() : "");
@@ -1323,7 +1337,8 @@
 
     const connectLiveWs = async () => {
       disconnectWs();
-      const probe = await probeBackendHealth(state.apiBase);
+      const targetBase = state.liveBase || state.apiBase;
+      const probe = await probeBackendHealth(targetBase);
       if (state.viewMode !== "live") return;
       if (probe.serverless || !probe.wsReady) {
         if (probe.serverless) {
@@ -1331,22 +1346,22 @@
           $("live-stream-meta").textContent = "Serverless Mode · Connect Live URL in Settings";
           if ($("live-badge-text")) $("live-badge-text").textContent = "CONNECT LIVE BACKEND IN SETTINGS";
         } else {
-          $("ws-conn-status").textContent = "Backend unreachable · Retrying...";
-          $("live-stream-meta").textContent = "Waiting for Live Backend...";
+          $("ws-conn-status").textContent = "Waking live backend · Retrying...";
+          $("live-stream-meta").textContent = "Waking Live Backend...";
           clearTimeout(state.wsReconnectTimer);
           state.wsReconnectTimer = setTimeout(connectLiveWs, 4000);
         }
         return;
       }
 
-      const url = toWsUrl(state.apiBase);
+      const url = toWsUrl(targetBase);
       $("ws-conn-status").textContent = `Connecting to ${url}...`;
       $("live-stream-meta").textContent = "Connecting to Live Feed...";
       const ws = new WebSocket(url);
       state.ws = ws;
       ws.onopen = () => {
         if ($("api-health-dot")) $("api-health-dot").className = "conn-dot is-ok";
-        $("ws-conn-status").textContent = `Live Connected · ${state.apiBase.replace(/^https?:\/\//, "")}`;
+        $("ws-conn-status").textContent = `Live Connected · ${targetBase.replace(/^https?:\/\//, "")}`;
         $("live-stream-meta").textContent = "Live Stream Connected";
       };
       ws.onmessage = (evt) => {
@@ -1449,7 +1464,7 @@
       if (isLive) {
         renderIdleLiveSchedule();
         try {
-          await fetch(`${state.apiBase}/api/mode`, {
+          await fetch(`${state.liveBase}/api/mode`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ mode: "free_live" }),
