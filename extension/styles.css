@@ -1157,14 +1157,37 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   color: var(--fia-yellow);
 }
 .hourglass-spinner svg {
-  animation: hourglass-flip 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  animation: hourglass-flip 2.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   will-change: transform;
 }
+.hg-sand-top {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: sand-drain 2.2s linear infinite;
+}
+.hg-sand-bottom {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: sand-fill 2.2s linear infinite;
+}
+.hg-sand-stream {
+  animation: sand-stream 0.55s linear infinite;
+}
 @keyframes hourglass-flip {
-  0% { transform: rotate(0deg); }
-  45% { transform: rotate(180deg); }
-  55% { transform: rotate(180deg); }
-  100% { transform: rotate(360deg); }
+  0%, 72% { transform: rotate(0deg); }
+  100% { transform: rotate(180deg); }
+}
+@keyframes sand-drain {
+  0% { transform: scaleY(1); }
+  72%, 100% { transform: scaleY(0.08); }
+}
+@keyframes sand-fill {
+  0% { transform: scaleY(0.12); }
+  72%, 100% { transform: scaleY(1); }
+}
+@keyframes sand-stream {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -6; }
 }
 
 .pred-loading-title {

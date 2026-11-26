@@ -1509,7 +1509,7 @@
     let forecastReqId = 0;
     let progressTimer = null;
 
-    const startHourglassOverlay = (targetDurationMs) => {
+    const startHourglassOverlay = () => {
       clearInterval(progressTimer);
       const overlay = $("pred-loading-overlay");
       const stepEl = $("pred-loading-step");
@@ -1522,23 +1522,18 @@
       const t0 = performance.now();
       const update = () => {
         const elapsedMs = performance.now() - t0;
-        const pct = Math.min(96, Math.max(6, (elapsedMs / Math.max(1000, targetDurationMs)) * 96));
+        const pct = Math.min(92, 18 + (elapsedMs / 2500) * 74);
         if (barEl) barEl.style.width = `${pct.toFixed(1)}%`;
         if (elapsedEl) elapsedEl.textContent = `${(elapsedMs / 1000).toFixed(1)}s`;
-
-        if (pct < 34) {
-          if (stageEl) stageEl.textContent = "STAGE 1 / 3";
-          if (stepEl) stepEl.textContent = "Loading 2018–2026 qualifying & starting grid data...";
-        } else if (pct < 68) {
-          if (stageEl) stageEl.textContent = "STAGE 2 / 3";
-          if (stepEl) stepEl.textContent = "Evaluating driver, constructor & circuit history...";
-        } else {
-          if (stageEl) stageEl.textContent = "STAGE 3 / 3";
-          if (stepEl) stepEl.textContent = "Computing Top-3 podium & race-win probabilities...";
+        if (stageEl) stageEl.textContent = "COMPUTING";
+        if (stepEl) {
+          stepEl.textContent = elapsedMs < 900
+            ? "Evaluating qualifying grid & driver/team form..."
+            : "Running Top-3 podium & race-win probabilities...";
         }
       };
       update();
-      progressTimer = setInterval(update, 100);
+      progressTimer = setInterval(update, 80);
     };
 
     const stopHourglassOverlay = () => {
@@ -1550,26 +1545,22 @@
       if (overlay) overlay.classList.add("hidden");
     };
 
-    const runForecast = async (minDurationMs = 11000) => {
+    const runForecast = async () => {
       const reqId = ++forecastReqId;
       const season = Number($("pred-season-select").value) || 2026;
       const round = Number($("pred-round-select").value) || undefined;
       const btn = $("btn-run-post-quali");
-      btn.textContent = "Computing Forecast...";
+      btn.textContent = "Computing...";
       btn.disabled = true;
-      startHourglassOverlay(minDurationMs);
+      startHourglassOverlay();
       const startedAt = performance.now();
 
       try {
-        const fetchPromise = fetch(`${state.apiBase}/api/predict/post-quali`, {
+        const r = await fetch(`${state.apiBase}/api/predict/post-quali`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ season, round }),
         });
-        const [r] = await Promise.all([
-          fetchPromise,
-          new Promise((resolve) => setTimeout(resolve, minDurationMs)),
-        ]);
         if (reqId !== forecastReqId) return;
         if (r.ok) {
           renderPostQuali(await r.json());
@@ -1588,11 +1579,11 @@
       }
     };
 
-    $("pred-season-select").addEventListener("change", (e) => loadRounds(e.target.value).then(() => runForecast(11000)));
-    $("pred-round-select").addEventListener("change", () => runForecast(11000));
-    $("btn-run-post-quali").addEventListener("click", () => runForecast(11000));
-    bindSettingsPopover(() => loadRounds($("pred-season-select").value).then(() => runForecast(1800)));
-    loadRounds($("pred-season-select").value).then(() => runForecast(1800));
+    $("pred-season-select").addEventListener("change", (e) => loadRounds(e.target.value).then(runForecast));
+    $("pred-round-select").addEventListener("change", runForecast);
+    $("btn-run-post-quali").addEventListener("click", runForecast);
+    bindSettingsPopover(() => loadRounds($("pred-season-select").value).then(runForecast));
+    loadRounds($("pred-season-select").value).then(runForecast);
   }
 
   document.addEventListener("DOMContentLoaded", () => {

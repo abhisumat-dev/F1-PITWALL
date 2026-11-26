@@ -11,7 +11,8 @@ __pycache__/
 
 # Caches, local telemetry & parquet datasets
 backend/cache/
-backend/data/
+backend/data/*
+!backend/data/pre_race_raw.parquet
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -80,7 +80,12 @@ JOLPICA_CACHE_DIR: Path = CACHE_DIR / "jolpica"
 OPENF1_CACHE_DIR: Path = CACHE_DIR / "openf1"
 
 DATA_DIR: Path = Path(_env_str("F1_DATA_DIR", str(_DEFAULT_DATA_BASE)))
-PRE_RACE_RAW_PATH: Path = DATA_DIR / "pre_race_raw.parquet"
+_BUNDLED_PRE_RACE_RAW: Path = BACKEND_DIR / "data" / "pre_race_raw.parquet"
+PRE_RACE_RAW_PATH: Path = (
+    _BUNDLED_PRE_RACE_RAW
+    if not os.environ.get("F1_DATA_DIR") and _BUNDLED_PRE_RACE_RAW.exists()
+    else (DATA_DIR / "pre_race_raw.parquet")
+)
 IN_RACE_RAW_PATH: Path = DATA_DIR / "in_race_raw.parquet"
 
 ARTIFACT_DIR: Path = Path(
